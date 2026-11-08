@@ -20,79 +20,90 @@ An open-source, AI-powered trip packing and lifecycle tracking assistant backed 
 
 ---
 
-## App Screens
+## App Screens & Usage Pattern (Critical User Journey)
 
 <p align="center">
-  <img src="assets/app_screens.svg" width="100%" alt="PackTrack App Screens — Home Dashboard, Step-by-Step Trip Interview, and 3-Mode Packing Checklist" />
+  <img src="assets/app_screens.svg" width="100%" alt="PackTrack App Screens — Home Dashboard, 3-Stage Gemini Trip Interview, and 3-Mode Packing Checklist" />
 </p>
 
----
-
-## Critical User Journeys (CUJ)
-
-### 1. Plan a New Trip (Conditional Interview → Checklist)
+### 1. App Usage Pattern (CUJ Flow)
 
 ```mermaid
 flowchart LR
-    classDef step fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff
-    classDef ai fill:#3b0764,stroke:#c084fc,stroke-width:2px,color:#faf5ff,font-weight:bold
-    classDef done fill:#065f46,stroke:#10b981,stroke-width:2px,color:#ecfdf5,font-weight:bold
+    classDef userNode fill:#065f46,stroke:#10b981,stroke-width:2px,color:#ecfdf5,font-weight:bold
+    classDef authNode fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#e0e7ff,font-weight:bold
+    classDef screenNode fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff
+    classDef aiNode fill:#3b0764,stroke:#c084fc,stroke-width:2px,color:#faf5ff,font-weight:bold
+    classDef modeNode fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fef3c7
+    classDef dbNode fill:#083344,stroke:#22d3ee,stroke-width:2.5px,color:#ecfeff,font-weight:bold
 
-    A(["➕ Tap + New Trip"]):::done --> B("📍 Destination &\nExact Travel Dates"):::step
-    B --> C("🌦️ Fetch Open-Meteo\nForecast"):::step
-    C --> D("🚗 Flight vs. Car,\nLuggage & Work?"):::step
-    D --> E[["🤖 Gemini Evaluates Rules\n+ Suggests Weather Items"]]:::ai
-    E --> F(["✅ Checklist Ready"]):::done
-```
+    Start(["👤 Open Web or Android App"]):::userNode --> Auth{{"🔐 Google Sign-In Gate\n(OAuth JWT + Allowlist)"}}:::authNode
+    Auth -->|"Verified Email"| Home(["🏠 Home Dashboard\n(Saved Trips + Default Template)"]):::screenNode
 
-### 2. Pack, Travel & Grow Your Default Template
+    Home -->|"Tap + New Trip"| Stage1(["📍 Stage 1: Destination & Dates\n+ Live Open-Meteo Weather"]):::screenNode
+    Stage1 --> Stage23(["🚗 Stage 2 & 3: Car Mode,\nWork/Leisure & Luggage Space"]):::screenNode
 
-```mermaid
-flowchart LR
-    classDef mode fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fef3c7,font-weight:bold
-    classDef action fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff
-    classDef template fill:#065f46,stroke:#10b981,stroke-width:2px,color:#ecfdf5,font-weight:bold
+    Stage23 --> GeminiEval[["🤖 Gemini Structured Output\n(Evaluate Rules + Weather Suggestions)"]]:::aiNode
+    GeminiEval --> Checklist(["✅ Trip Checklist Screen\n(+ Collapsible AI Suggestions)"]):::screenNode
 
-    P1(["🧳 1. Pack Mode\n(Check Off Items at Home)"]):::mode --> P2(["🚪 2. Doorway Mode\n(60s Critical Check)"]):::mode
-    P2 --> P3(["🏨 3. Checkout Mode\n(Return Sweep at Hotel)"]):::mode
+    Checklist --> Modes{"🔄 3 Lifecycle Modes"}:::modeNode
+    Modes -->|"Phase 1"| Outbound(["🧳 Pack Outbound\n(Scaled by Days & Weather)"]):::userNode
+    Modes -->|"Phase 2"| Doorway(["🚪 60s Doorway Check\n(Critical Essentials Only)"]):::userNode
+    Modes -->|"Phase 3"| Hotel(["🏨 Hotel Checkout Sweep\n(High-Loss Return Items)"]):::userNode
 
-    Item("👆 Long-Press Any Item\nor Tap + Add Suggestion"):::action --> Save(["⭐ Save Rule to\nDefault Template"]):::template
+    Checklist -->|"Long-Press Any Item:\n⭐ Save to Default Template"| Firestore[("🗄️ Room SQLite &\nCloud Firestore DB")]:::dbNode
+    Outbound & Doorway & Hotel --> Firestore
 ```
 
 ---
 
-## High-Level Design (HLD)
-
-### 1. Client Touchpoints & Cloud Sync
+## High-Level Design (Website & App Major APIs)
 
 ```mermaid
-flowchart LR
+flowchart TB
     classDef client fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#ecfdf5,font-weight:bold
-    classDef edge fill:#0c4a6e,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff,font-weight:bold
+    classDef gate fill:#311042,stroke:#e879f9,stroke-width:2px,color:#fdf4ff,font-weight:bold
+    classDef api fill:#0c4a6e,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff
+    classDef ext fill:#3b0764,stroke:#a855f7,stroke-width:2px,color:#f3e8ff,font-weight:bold
+    classDef weather fill:#0c4a6e,stroke:#7dd3fc,stroke-width:2px,color:#e0f2fe,font-weight:bold
     classDef db fill:#164e63,stroke:#06b6d4,stroke-width:2.5px,color:#ecfeff,font-weight:bold
 
-    Android(["📱 Android App\n(Compose + Widget)"]):::client <-->|"100% Offline Read/Write"| Room[("🗄️ Room SQLite\n(packtrack_local.db)")]:::db
-    Room <-->|"Background Sync"| Firestore[("🔥 Cloud Firestore\n(user_state_{userId})")]:::db
+    subgraph Touchpoints["📱 Client Touchpoints"]
+        WebPWA(["🌐 Cloudflare Web App\n(Responsive PWA)"]):::client
+        Android(["🤖 Native Android App\n(Jetpack Compose + Home Widget)"]):::client
+        McpClient(["🔌 MCP Agent\n(Claude / Gemini CLI)"]):::client
+    end
 
-    WebPWA(["🌐 Web App (PWA)"]):::client <-->|"GET / POST /api/*"| Worker[["⚡ Cloudflare Worker\n(HttpRouter + McpRouter)"]]:::edge
-    McpClient(["🔌 MCP Agent"]):::client <-->|"POST /mcp"| Worker
-    Worker <-->|"REST GET / PATCH"| Firestore
-```
+    AuthGate{{"🔐 Google OAuth JWT Verifier\n(oauth2.googleapis.com/tokeninfo + ALLOWED_EMAILS)"}}:::gate
 
-### 2. Checklist Generation Pipeline (Weather + Gemini + Fallback)
+    subgraph MajorAPIs["⚡ Cloudflare Worker & App Major APIs"]
+        StateAPI["GET & POST /api/state\n(Load / Save Trips & Default Template)"]:::api
+        CreateAPI["POST /api/trips/create\n(3-Stage Interview -> Build Checklist)"]:::api
+        RecreateAPI["POST /api/trips/recreate\n(Refresh Weather & Re-evaluate Rules)"]:::api
+        McpAPI["POST /mcp\n(JSON-RPC 2.0 Packing Tools)"]:::api
+    end
 
-```mermaid
-flowchart LR
-    classDef input fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff
-    classDef ext fill:#3b0764,stroke:#a855f7,stroke-width:2px,color:#f3e8ff,font-weight:bold
-    classDef fallback fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fef3c7
-    classDef out fill:#065f46,stroke:#10b981,stroke-width:2px,color:#ecfdf5,font-weight:bold
+    subgraph ExternalServices["🌦️ External AI & Weather Services"]
+        OpenMeteo[["🌤️ Open-Meteo Forecast API\n(Geocoding + 16-Day High/Low & Rain)"]]:::weather
+        GeminiCascade[["🤖 Google Gemini API Cascade\n(/v1beta/models -> Structured JSON Schema)"]]:::ext
+    end
 
-    Trip("📋 Trip Answers +\nDefault Template Rules"):::input --> Weather[["🌤️ Open-Meteo API\n(Temps, Rain & Plugs)"]]:::ext
-    Weather --> Gemini[["🤖 Gemini Structured JSON\n(Match Rules + Suggest 2-5 Items)"]]:::ext
-    Gemini -->|"200 OK"| Final(["✅ Categorized Checklist\n+ AI Suggestions"]):::out
-    Gemini -.->|"Offline / Error"| Backup("⚙️ Rule-Based Backup Engine\n+ Fallback Warning Banner"):::fallback
-    Backup -.-> Final
+    subgraph Storage["🗄️ Local-First & Cloud Persistence"]
+        RoomDB[("📱 Android Room SQLite\n(Offline-First Flights DB)")]:::db
+        FirestoreDB[("🔥 Firebase Cloud Firestore\n(packtrack_state/user_state_{userId})")]:::db
+    end
+
+    Android <-->|"100% Offline Read/Write"| RoomDB
+    RoomDB <-->|"Background Cloud Sync"| FirestoreDB
+
+    WebPWA & Android & McpClient -->|"Bearer <Google_ID_Token>"| AuthGate
+    AuthGate --> StateAPI & CreateAPI & RecreateAPI & McpAPI
+
+    CreateAPI & RecreateAPI -->|"1. Fetch Exact-Date Forecast"| OpenMeteo
+    CreateAPI & RecreateAPI -->|"2. Evaluate Template Rules + Suggest Items"| GeminiCascade
+    McpAPI --> CreateAPI & StateAPI
+
+    StateAPI & CreateAPI & RecreateAPI <-->|"REST GET / PATCH"| FirestoreDB
 ```
 
 ---
