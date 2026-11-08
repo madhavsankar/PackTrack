@@ -1,187 +1,260 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 470" width="100%" height="100%">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 490" width="100%" height="100%">
   <defs>
-    <linearGradient id="bgGrad" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#070b14"/>
-      <stop offset="100%" stop-color="#0f172a"/>
+    <linearGradient id="canvasBg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#050811"/>
+      <stop offset="100%" stop-color="#0b1120"/>
     </linearGradient>
-    <linearGradient id="accentGrad" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0%" stop-color="#10b981"/>
-      <stop offset="100%" stop-color="#059669"/>
-    </linearGradient>
+    <filter id="phoneShadow" x="-10%" y="-5%" width="120%" height="115%">
+      <feDropShadow dx="0" dy="10" stdDeviation="12" flood-color="#000000" flood-opacity="0.55"/>
+    </filter>
   </defs>
 
-  <rect width="980" height="470" rx="20" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="1.5"/>
+  <rect width="980" height="490" rx="22" fill="url(#canvasBg)" stroke="#1e293b" stroke-width="1.5"/>
 
-  <!-- ================= PHONE 1: HOME DASHBOARD & SAVED TRIPS ================= -->
-  <g transform="translate(28, 22)">
-    <rect width="288" height="426" rx="26" fill="#0b0f17" stroke="#334155" stroke-width="2"/>
-    <!-- Top Header -->
-    <rect x="12" y="14" width="264" height="36" rx="9" fill="#131a26" stroke="#232f42"/>
-    <text x="24" y="37" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="14" font-weight="bold">☰</text>
-    <text x="48" y="34" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="12" font-weight="bold">PackTrack</text>
-    <circle cx="114" cy="30" r="3.5" fill="#10b981"/>
-    <text x="123" y="34" fill="#64748b" font-family="system-ui, sans-serif" font-size="9">Google Synced</text>
-    <rect x="206" y="21" width="60" height="22" rx="7" fill="#1e293b"/>
-    <text x="215" y="35" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="9" font-weight="bold">📋 Rules</text>
+  <!-- ========================================================================= -->
+  <!-- PHONE 1: HOME SCREEN (Minimalist Saved Trips + "+ New Trip" FAB)          -->
+  <!-- ========================================================================= -->
+  <g transform="translate(28, 20)" filter="url(#phoneShadow)">
+    <!-- Phone Frame -->
+    <rect width="288" height="446" rx="34" fill="#090D16" stroke="#263248" stroke-width="2.5"/>
+    <!-- Status Bar -->
+    <text x="26" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5" font-weight="600">9:41</text>
+    <rect x="114" y="11" width="60" height="14" rx="7" fill="#030712"/>
+    <text x="236" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9">5G 100%</text>
 
-    <!-- Trip Card 1 (Upcoming) -->
-    <g transform="translate(12, 62)">
-      <rect width="264" height="106" rx="14" fill="#131a26" stroke="#10b981" stroke-opacity="0.45"/>
-      <text x="14" y="24" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="13" font-weight="bold">🇮🇳 Mumbai</text>
-      <rect x="192" y="10" width="58" height="19" rx="6" fill="#064e3b"/>
-      <text x="200" y="23" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="8.5" font-weight="bold">In 3 days</text>
-      <text x="14" y="41" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">Nov 10 – Nov 17 · 7d · Work · Carry-On</text>
-      <text x="14" y="57" fill="#38bdf8" font-family="system-ui, sans-serif" font-size="9" font-weight="bold">🌤️ 74°–86°F · 2 rainy days · Plug C/D/M</text>
-      <!-- Progress Bar -->
-      <rect x="14" y="70" width="236" height="7" rx="3.5" fill="#1e293b"/>
-      <rect x="14" y="70" width="180" height="7" rx="3.5" fill="#10b981"/>
-      <text x="14" y="93" fill="#cbd5e1" font-family="system-ui, sans-serif" font-size="9" font-weight="bold">16 / 21 packed (76%)</text>
-      <text x="196" y="93" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9" font-weight="bold">Open →</text>
+    <!-- TopAppBar: Hamburger + "PackTrack" + "3 trip(s)" -->
+    <text x="22" y="54" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="16">☰</text>
+    <text x="50" y="50" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">PackTrack</text>
+    <text x="50" y="63" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5">3 trip(s)</text>
+
+    <!-- SavedTripCard 1: Seattle -->
+    <g transform="translate(14, 78)">
+      <rect width="260" height="52" rx="12" fill="#111827" stroke="#1E293B" stroke-width="1"/>
+      <text x="14" y="23" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600">Seattle</text>
+      <!-- Relative Start Pill -->
+      <rect x="62" y="11" width="48" height="16" rx="5" fill="#1E293B"/>
+      <text x="68" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="500">In 3 days</text>
+      <!-- Duration Pill -->
+      <rect x="115" y="11" width="24" height="16" rx="5" fill="#10B981" fill-opacity="0.14" stroke="#10B981" stroke-opacity="0.4"/>
+      <text x="121" y="22" fill="#10B981" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">4d</text>
+      <!-- Temp Range -->
+      <text x="14" y="40" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5">44°–56°F</text>
+      <!-- Packed Count + Trash Icon -->
+      <text x="198" y="30" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="600">14/18</text>
+      <text x="236" y="31" fill="#64748B" font-family="Inter, system-ui, sans-serif" font-size="11">🗑</text>
     </g>
 
-    <!-- Trip Card 2 -->
-    <g transform="translate(12, 178)">
-      <rect width="264" height="98" rx="14" fill="#131a26" stroke="#232f42"/>
-      <text x="14" y="24" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="13" font-weight="bold">🏔️ Banff &amp; Calgary</text>
-      <rect x="186" y="10" width="64" height="19" rx="6" fill="#1e293b"/>
-      <text x="194" y="23" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5" font-weight="bold">In 2 weeks</text>
-      <text x="14" y="41" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">Nov 21 – Nov 26 · 5d · Leisure · Rental Car</text>
-      <text x="14" y="57" fill="#93c5fd" font-family="system-ui, sans-serif" font-size="9">❄️ 18°–32°F · Cold Weather Gear</text>
-      <rect x="14" y="70" width="236" height="7" rx="3.5" fill="#1e293b"/>
-      <rect x="14" y="70" width="60" height="7" rx="3.5" fill="#10b981"/>
-      <text x="14" y="90" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">5 / 19 packed</text>
+    <!-- SavedTripCard 2: London -->
+    <g transform="translate(14, 140)">
+      <rect width="260" height="52" rx="12" fill="#111827" stroke="#1E293B" stroke-width="1"/>
+      <text x="14" y="23" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600">London</text>
+      <rect x="64" y="11" width="54" height="16" rx="5" fill="#1E293B"/>
+      <text x="70" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="500">In 2 weeks</text>
+      <rect x="123" y="11" width="24" height="16" rx="5" fill="#10B981" fill-opacity="0.14" stroke="#10B981" stroke-opacity="0.4"/>
+      <text x="129" y="22" fill="#10B981" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">5d</text>
+      <text x="14" y="40" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5">43°–56°F</text>
+      <text x="202" y="30" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="600">6/21</text>
+      <text x="236" y="31" fill="#64748B" font-family="Inter, system-ui, sans-serif" font-size="11">🗑</text>
     </g>
 
-    <!-- Default Template Preview Card -->
-    <g transform="translate(12, 286)">
-      <rect width="264" height="78" rx="12" fill="#131a26" stroke="#232f42"/>
-      <text x="14" y="22" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="10.5" font-weight="bold">⭐ Default Packing Template (28 Rules)</text>
-      <text x="14" y="39" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">• Always: Wallet, Phone Charger, Earbuds, T-shirts</text>
-      <text x="14" y="53" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">• Only when working: Laptop + Charger</text>
-      <text x="14" y="67" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="8.5">• Custom: "If &gt;5d and rain expected in India..."</text>
+    <!-- SavedTripCard 3: Tokyo -->
+    <g transform="translate(14, 202)">
+      <rect width="260" height="52" rx="12" fill="#111827" stroke="#1E293B" stroke-width="1"/>
+      <text x="14" y="23" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="600">Tokyo</text>
+      <rect x="55" y="11" width="54" height="16" rx="5" fill="#1E293B"/>
+      <text x="61" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="500">In 1 month</text>
+      <rect x="114" y="11" width="24" height="16" rx="5" fill="#10B981" fill-opacity="0.14" stroke="#10B981" stroke-opacity="0.4"/>
+      <text x="120" y="22" fill="#10B981" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">7d</text>
+      <text x="14" y="40" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5">50°–64°F</text>
+      <text x="202" y="30" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="600">0/24</text>
+      <text x="236" y="31" fill="#64748B" font-family="Inter, system-ui, sans-serif" font-size="11">🗑</text>
     </g>
 
-    <!-- FAB (+ New Trip) -->
-    <rect x="172" y="376" width="104" height="36" rx="14" fill="url(#accentGrad)"/>
-    <text x="190" y="398" fill="#052e16" font-family="system-ui, sans-serif" font-size="11" font-weight="bold">+ New Trip</text>
+    <!-- ExtendedFAB: "+ New Trip" -->
+    <g transform="translate(158, 378)">
+      <rect width="114" height="42" rx="14" fill="#10B981"/>
+      <text x="18" y="26" fill="#052E16" font-family="Inter, system-ui, sans-serif" font-size="12" font-weight="700">+  New Trip</text>
+    </g>
+
+    <!-- Bottom Gesture Pill -->
+    <rect x="104" y="434" width="80" height="4" rx="2" fill="#334155"/>
   </g>
 
-  <!-- ================= PHONE 2: 3-STAGE GEMINI TRIP INTERVIEW ================= -->
-  <g transform="translate(346, 22)">
-    <rect width="288" height="426" rx="26" fill="#0b0f17" stroke="#334155" stroke-width="2"/>
-    <!-- Header -->
-    <rect x="12" y="14" width="264" height="36" rx="9" fill="#131a26" stroke="#232f42"/>
-    <text x="24" y="36" fill="#10b981" font-family="system-ui, sans-serif" font-size="10" font-weight="bold">← Back</text>
-    <text x="78" y="36" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="11.5" font-weight="bold">✨ Gemini Trip Interview</text>
+  <!-- ========================================================================= -->
+  <!-- PHONE 2: STEP-BY-STEP INTERVIEW (6-Segment Stepper + Date Pickers + Mic)  -->
+  <!-- ========================================================================= -->
+  <g transform="translate(346, 20)" filter="url(#phoneShadow)">
+    <!-- Phone Frame -->
+    <rect width="288" height="446" rx="34" fill="#090D16" stroke="#263248" stroke-width="2.5"/>
+    <!-- Status Bar -->
+    <text x="26" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5" font-weight="600">9:41</text>
+    <rect x="114" y="11" width="60" height="14" rx="7" fill="#030712"/>
+    <text x="236" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9">5G 100%</text>
 
-    <!-- 3-Stage Stepper -->
-    <rect x="16" y="60" width="80" height="5" rx="2.5" fill="#10b981"/>
-    <rect x="104" y="60" width="80" height="5" rx="2.5" fill="#10b981"/>
-    <rect x="192" y="60" width="80" height="5" rx="2.5" fill="#10b981"/>
+    <!-- TopAppBar: Back Arrow + "Seattle (4 days)" -->
+    <text x="22" y="54" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="15">←</text>
+    <text x="48" y="54" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="14" font-weight="700">Seattle (4 days)</text>
 
-    <!-- Stage 1: Destination + Exact Dates + Live Open-Meteo Forecast -->
-    <g transform="translate(12, 74)">
-      <rect width="264" height="98" rx="12" fill="#131a26" stroke="#232f42"/>
-      <text x="12" y="19" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9.5" font-weight="bold">STAGE 1 · DESTINATION &amp; EXACT DATES</text>
-      <rect x="12" y="27" width="240" height="24" rx="6" fill="#0b0f17" stroke="#334155"/>
-      <text x="20" y="43" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="10" font-weight="bold">📍 Mumbai · 2026-11-10 → 2026-11-17 (7d)</text>
-      <rect x="12" y="57" width="240" height="32" rx="7" fill="#0c2438" stroke="#0284c7" stroke-opacity="0.5"/>
-      <text x="20" y="71" fill="#7dd3fc" font-family="system-ui, sans-serif" font-size="9" font-weight="bold">🌦️ Live Open-Meteo Forecast: 74°F – 86°F</text>
-      <text x="20" y="83" fill="#bae6fd" font-family="system-ui, sans-serif" font-size="8">2 rainy days expected · International (Plug Type C/D/M)</text>
+    <!-- 6-Segment Progress Stepper (Step 2 of 6 active) -->
+    <g transform="translate(18, 70)">
+      <rect x="0"   y="0" width="38" height="4" rx="2" fill="#10B981"/>
+      <rect x="43"  y="0" width="38" height="4" rx="2" fill="#10B981"/>
+      <rect x="86"  y="0" width="38" height="4" rx="2" fill="#1E293B"/>
+      <rect x="129" y="0" width="38" height="4" rx="2" fill="#1E293B"/>
+      <rect x="172" y="0" width="38" height="4" rx="2" fill="#1E293B"/>
+      <rect x="215" y="0" width="37" height="4" rx="2" fill="#1E293B"/>
     </g>
 
-    <!-- Stage 2: Transport & Purpose -->
-    <g transform="translate(12, 180)">
-      <rect width="264" height="96" rx="12" fill="#131a26" stroke="#232f42"/>
-      <text x="12" y="19" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9.5" font-weight="bold">STAGE 2 · TRANSPORT &amp; PURPOSE</text>
-      <!-- Chips -->
-      <rect x="12" y="28" width="74" height="26" rx="7" fill="#064e3b" stroke="#10b981"/>
-      <text x="20" y="45" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="8.5" font-weight="bold">🔑 Rental Car</text>
-      <rect x="92" y="28" width="74" height="26" rx="7" fill="#0b0f17" stroke="#232f42"/>
-      <text x="104" y="45" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">🚗 Own Car</text>
-      <rect x="172" y="28" width="80" height="26" rx="7" fill="#0b0f17" stroke="#232f42"/>
-      <text x="182" y="45" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">🚇 Transit Only</text>
+    <!-- Question Heading & Subtitle -->
+    <text x="18" y="100" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="14.5" font-weight="700">When are you traveling?</text>
+    <text x="18" y="117" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5">Select your exact Start and End dates so we can</text>
+    <text x="18" y="130" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5">fetch the weather forecast for your travel dates.</text>
 
-      <rect x="12" y="60" width="116" height="26" rx="7" fill="#064e3b" stroke="#10b981"/>
-      <text x="34" y="77" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9" font-weight="bold">💼 Work Trip</text>
-      <rect x="136" y="60" width="116" height="26" rx="7" fill="#0b0f17" stroke="#232f42"/>
-      <text x="160" y="77" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">🌴 Leisure Only</text>
+    <!-- Start Date & End Date Cards -->
+    <g transform="translate(18, 144)">
+      <rect x="0" y="0" width="121" height="52" rx="12" fill="#111827" stroke="#1E293B"/>
+      <text x="12" y="19" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">START DATE</text>
+      <text x="12" y="38" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="11.5" font-weight="600">2026-11-10</text>
+
+      <rect x="131" y="0" width="121" height="52" rx="12" fill="#111827" stroke="#1E293B"/>
+      <text x="143" y="19" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">END DATE</text>
+      <text x="143" y="38" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="11.5" font-weight="600">2026-11-14</text>
     </g>
 
-    <!-- Stage 3: Luggage Space & Gemini Evaluation -->
-    <g transform="translate(12, 284)">
-      <rect width="264" height="126" rx="12" fill="#131a26" stroke="#232f42"/>
-      <text x="12" y="19" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9.5" font-weight="bold">STAGE 3 · LUGGAGE &amp; GEMINI EVALUATION</text>
-      <rect x="12" y="28" width="116" height="26" rx="7" fill="#064e3b" stroke="#10b981"/>
-      <text x="26" y="45" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9" font-weight="bold">🧳 Carry-On + Personal</text>
-      <rect x="136" y="28" width="116" height="26" rx="7" fill="#0b0f17" stroke="#232f42"/>
-      <text x="154" y="45" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="9">🛄 Checked Bag</text>
+    <!-- Quick Date Preset Chips -->
+    <g transform="translate(18, 208)">
+      <rect x="0" y="0" width="84" height="28" rx="14" fill="#111827" stroke="#1E293B"/>
+      <text x="12" y="18" fill="#E2E8F0" font-family="Inter, system-ui, sans-serif" font-size="9">Today → +3d</text>
 
-      <rect x="12" y="64" width="240" height="50" rx="9" fill="#0b0f17" stroke="#10b981" stroke-opacity="0.4"/>
-      <text x="22" y="82" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="9" font-weight="bold">🤖 Gemini Structured Output Cascade:</text>
-      <text x="22" y="96" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8">Evaluates all 28 Default Template rules + weather</text>
-      <text x="22" y="108" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="8">in 1 JSON-schema call (with deterministic fallback)</text>
+      <rect x="90" y="0" width="96" height="28" rx="14" fill="#10B981" fill-opacity="0.16" stroke="#10B981"/>
+      <text x="102" y="18" fill="#10B981" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="600">In 3 days (4d)</text>
+
+      <rect x="0" y="34" width="92" height="28" rx="14" fill="#111827" stroke="#1E293B"/>
+      <text x="12" y="52" fill="#E2E8F0" font-family="Inter, system-ui, sans-serif" font-size="9">In 7 days (5d)</text>
+
+      <rect x="98" y="34" width="98" height="28" rx="14" fill="#111827" stroke="#1E293B"/>
+      <text x="110" y="52" fill="#E2E8F0" font-family="Inter, system-ui, sans-serif" font-size="9">In 2 weeks (5d)</text>
     </g>
+
+    <!-- Primary CTA Button: "Confirm 4 Days & Fetch Weather" -->
+    <g transform="translate(18, 286)">
+      <rect width="252" height="40" rx="12" fill="#10B981"/>
+      <text x="40" y="25" fill="#052E16" font-family="Inter, system-ui, sans-serif" font-size="11" font-weight="700">Confirm 4 Days &amp; Fetch Weather</text>
+    </g>
+
+    <!-- Bottom Voice & Text Bar -->
+    <g transform="translate(14, 378)">
+      <circle cx="20" cy="20" r="19" fill="#064E3B"/>
+      <text x="13" y="25" fill="#A7F3D0" font-family="Inter, system-ui, sans-serif" font-size="13">🎙️</text>
+
+      <rect x="46" y="1" width="170" height="38" rx="19" fill="#090D16" stroke="#1E293B"/>
+      <text x="60" y="24" fill="#64748B" font-family="Inter, system-ui, sans-serif" font-size="9.5">e.g. In 3 days for 4 days...</text>
+
+      <circle cx="240" cy="20" r="19" fill="#1E293B"/>
+      <text x="234" y="25" fill="#64748B" font-family="Inter, system-ui, sans-serif" font-size="12">➤</text>
+    </g>
+
+    <!-- Bottom Gesture Pill -->
+    <rect x="104" y="434" width="80" height="4" rx="2" fill="#334155"/>
   </g>
 
-  <!-- ================= PHONE 3: 3-MODE CHECKLIST & AI SUGGESTIONS ================= -->
-  <g transform="translate(664, 22)">
-    <rect width="288" height="426" rx="26" fill="#0b0f17" stroke="#334155" stroke-width="2"/>
-    <!-- Header -->
-    <rect x="12" y="14" width="264" height="36" rx="9" fill="#131a26" stroke="#232f42"/>
-    <text x="24" y="36" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="11.5" font-weight="bold">🇮🇳 Mumbai (7d)</text>
-    <text x="208" y="36" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9.5" font-weight="bold">🔄 Recreate</text>
+  <!-- ========================================================================= -->
+  <!-- PHONE 3: TRIP CHECKLIST SCREEN (Pack | Doorway | Checkout + Items)        -->
+  <!-- ========================================================================= -->
+  <g transform="translate(664, 20)" filter="url(#phoneShadow)">
+    <!-- Phone Frame -->
+    <rect width="288" height="446" rx="34" fill="#090D16" stroke="#263248" stroke-width="2.5"/>
+    <!-- Status Bar -->
+    <text x="26" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5" font-weight="600">9:41</text>
+    <rect x="114" y="11" width="60" height="14" rx="7" fill="#030712"/>
+    <text x="236" y="22" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9">5G 100%</text>
 
-    <!-- 3-Phase Lifecycle Mode Switcher -->
-    <rect x="12" y="56" width="264" height="30" rx="8" fill="#131a26" stroke="#232f42"/>
-    <rect x="14" y="58" width="88" height="26" rx="6" fill="#10b981"/>
-    <text x="22" y="75" fill="#052e16" font-family="system-ui, sans-serif" font-size="8.5" font-weight="bold">🧳 Pack Outbound</text>
-    <text x="110" y="75" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">🚪 Doorway (60s)</text>
-    <text x="196" y="75" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">🏨 Hotel Sweep</text>
+    <!-- TopAppBar: Back + "Seattle" [4d] + "44°–56°F • 3 rainy d" + "↻ Recreate" -->
+    <text x="20" y="52" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="15">←</text>
+    <text x="44" y="48" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="13.5" font-weight="700">Seattle</text>
+    <rect x="94" y="36" width="22" height="15" rx="5" fill="#1E293B"/>
+    <text x="99" y="47" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">4d</text>
+    <text x="44" y="61" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9">44°–56°F  •  3 rainy d</text>
+    <text x="214" y="51" fill="#10B981" font-family="Inter, system-ui, sans-serif" font-size="9.5" font-weight="600">↻ Recreate</text>
 
-    <!-- Collapsible AI-Suggested Additions Card -->
-    <g transform="translate(12, 94)">
-      <rect width="264" height="76" rx="10" fill="#131a26" stroke="#a855f7" stroke-opacity="0.45"/>
-      <text x="12" y="18" fill="#d8b4fe" font-family="system-ui, sans-serif" font-size="9.5" font-weight="bold">✨ AI-Suggested for Mumbai Weather (2)</text>
-      <!-- Suggestion 1 -->
-      <rect x="10" y="25" width="244" height="22" rx="5" fill="#0b0f17"/>
-      <text x="18" y="39" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="8.5">☔ Compact Umbrella (2 rainy days)</text>
-      <rect x="192" y="28" width="32" height="16" rx="4" fill="#10b981"/>
-      <text x="197" y="39" fill="#052e16" font-family="system-ui, sans-serif" font-size="8" font-weight="bold">+Add</text>
-      <text x="234" y="39" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">✕</text>
-      <!-- Suggestion 2 -->
-      <rect x="10" y="50" width="244" height="22" rx="5" fill="#0b0f17"/>
-      <text x="18" y="64" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="8.5">🔌 India Type D/M Plug Adapter</text>
-      <rect x="192" y="53" width="32" height="16" rx="4" fill="#10b981"/>
-      <text x="197" y="64" fill="#052e16" font-family="system-ui, sans-serif" font-size="8" font-weight="bold">+Add</text>
-      <text x="234" y="64" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8.5">✕</text>
+    <!-- Segmented 3-Mode Pill Switcher: Pack | Doorway | Checkout -->
+    <g transform="translate(14, 72)">
+      <rect width="260" height="32" rx="10" fill="#111827" stroke="#1E293B"/>
+      <rect x="3" y="3" width="84" height="26" rx="7" fill="#10B981"/>
+      <text x="31" y="20" fill="#052E16" font-family="Inter, system-ui, sans-serif" font-size="9.5" font-weight="700">Pack</text>
+      <text x="110" y="20" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5" font-weight="500">Doorway</text>
+      <text x="194" y="20" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9.5" font-weight="500">Checkout</text>
     </g>
 
-    <!-- Category: On Me & Electronics -->
-    <g transform="translate(12, 178)">
-      <text x="4" y="13" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9.5" font-weight="bold">ON ME &amp; DOCS (DOORWAY CRITICAL)</text>
-      <rect x="0" y="20" width="264" height="32" rx="8" fill="#131a26"/>
-      <rect x="10" y="28" width="16" height="16" rx="4" fill="#10b981"/>
-      <text x="14" y="40" fill="#052e16" font-family="system-ui, sans-serif" font-size="10" font-weight="bold">✓</text>
-      <text x="34" y="40" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10" text-decoration="line-through">Passport &amp; India Visa</text>
-      <text x="208" y="39" fill="#f59e0b" font-family="system-ui, sans-serif" font-size="8" font-weight="bold">🚪 Critical</text>
-
-      <rect x="0" y="56" width="264" height="32" rx="8" fill="#131a26"/>
-      <rect x="10" y="64" width="16" height="16" rx="4" fill="#10b981"/>
-      <text x="14" y="76" fill="#052e16" font-family="system-ui, sans-serif" font-size="10" font-weight="bold">✓</text>
-      <text x="34" y="76" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="10" text-decoration="line-through">Driver's License (Rental Car)</text>
-
-      <text x="4" y="106" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9.5" font-weight="bold">ELECTRONICS &amp; WORK</text>
-      <rect x="0" y="112" width="264" height="32" rx="8" fill="#131a26"/>
-      <rect x="10" y="120" width="16" height="16" rx="4" fill="#0b0f17" stroke="#475569"/>
-      <text x="34" y="132" fill="#f8fafc" font-family="system-ui, sans-serif" font-size="10" font-weight="bold">Laptop + Charger (Work rule)</text>
-
-      <!-- Long-press tooltip hint -->
-      <rect x="0" y="150" width="264" height="80" rx="10" fill="#0f172a" stroke="#10b981" stroke-dasharray="3 3"/>
-      <text x="12" y="170" fill="#6ee7b7" font-family="system-ui, sans-serif" font-size="9.5" font-weight="bold">💡 Long-Press Any Item Action Sheet:</text>
-      <text x="12" y="186" fill="#e2e8f0" font-family="system-ui, sans-serif" font-size="8.5">⭐ Save to Default Template (with custom condition</text>
-      <text x="12" y="200" fill="#94a3b8" font-family="system-ui, sans-serif" font-size="8">e.g. "Only when flying international &gt; 5 days")</text>
-      <text x="12" y="216" fill="#38bdf8" font-family="system-ui, sans-serif" font-size="8">🏷️ Move to Custom Category (e.g. Medicines, Camera)</text>
+    <!-- Sleek Progress Bar Strip -->
+    <g transform="translate(14, 114)">
+      <rect x="0" y="3" width="218" height="5" rx="2.5" fill="#1E293B"/>
+      <rect x="0" y="3" width="168" height="5" rx="2.5" fill="#10B981"/>
+      <text x="226" y="9" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="600">14 / 18</text>
     </g>
+
+    <!-- Category 1: ON ME -->
+    <text x="16" y="138" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="700">ON ME</text>
+    <text x="256" y="138" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9">2/2</text>
+
+    <!-- Checked Item 1 (dimmed alpha) -->
+    <g transform="translate(14, 144)" opacity="0.55">
+      <rect width="260" height="44" rx="10" fill="#111827" stroke="#1E293B"/>
+      <rect x="12" y="14" width="16" height="16" rx="4" fill="#10B981"/>
+      <text x="16" y="26" fill="#052E16" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="700">✓</text>
+      <text x="36" y="21" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="10.5" text-decoration="line-through">Wallet &amp; License</text>
+      <text x="36" y="34" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5">Doorway  •  Personal</text>
+      <rect x="226" y="13" width="24" height="18" rx="6" fill="#1E293B"/>
+      <text x="232" y="25" fill="#E2E8F0" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">×1</text>
+    </g>
+
+    <!-- Category 2: ELECTRONICS -->
+    <text x="16" y="206" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="700">ELECTRONICS</text>
+    <text x="256" y="206" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9">1/2</text>
+
+    <!-- Unchecked Item 2: Laptop -->
+    <g transform="translate(14, 212)">
+      <rect width="260" height="44" rx="10" fill="#111827" stroke="#1E293B"/>
+      <rect x="12" y="14" width="16" height="16" rx="4" fill="#090D16" stroke="#475569" stroke-width="1.5"/>
+      <text x="36" y="21" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="10.5" font-weight="500">Laptop</text>
+      <text x="36" y="34" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5">Doorway  •  Personal  •  Work trip</text>
+      <rect x="226" y="13" width="24" height="18" rx="6" fill="#1E293B"/>
+      <text x="232" y="25" fill="#E2E8F0" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">×1</text>
+    </g>
+
+    <!-- Category 3: CLOTHES -->
+    <text x="16" y="274" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9" font-weight="700">CLOTHES</text>
+    <text x="256" y="274" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="9">3/4</text>
+
+    <!-- Unchecked Item 3: T-shirts (scaled ×5) -->
+    <g transform="translate(14, 280)">
+      <rect width="260" height="44" rx="10" fill="#111827" stroke="#1E293B"/>
+      <rect x="12" y="14" width="16" height="16" rx="4" fill="#090D16" stroke="#475569" stroke-width="1.5"/>
+      <text x="36" y="21" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="10.5" font-weight="500">T-shirts</text>
+      <text x="36" y="34" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8.5">Carry-On  •  4 days + 1 spare</text>
+      <rect x="226" y="13" width="24" height="18" rx="6" fill="#1E293B"/>
+      <text x="232" y="25" fill="#E2E8F0" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="600">×5</text>
+    </g>
+
+    <!-- Gemini Weather & Trip Suggestions Section at Bottom -->
+    <text x="16" y="342" fill="#10B981" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="700">✨ GEMINI WEATHER &amp; TRIP SUGGESTIONS</text>
+    <g transform="translate(14, 348)">
+      <rect width="260" height="46" rx="10" fill="#1E293B" fill-opacity="0.55" stroke="#10B981" stroke-opacity="0.45"/>
+      <text x="12" y="19" fill="#F8FAFC" font-family="Inter, system-ui, sans-serif" font-size="10" font-weight="500">Rain Jacket</text>
+      <rect x="74" y="8" width="76" height="14" rx="4" fill="#090D16"/>
+      <text x="79" y="18" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="7.5">Clothes • Carry-On</text>
+      <text x="12" y="34" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="8">3 rainy days forecast (44°–56°F)</text>
+      <!-- + Add Button & Dismiss X -->
+      <rect x="192" y="12" width="40" height="22" rx="6" fill="#10B981"/>
+      <text x="199" y="26" fill="#052E16" font-family="Inter, system-ui, sans-serif" font-size="8.5" font-weight="700">+ Add</text>
+      <text x="241" y="27" fill="#94A3B8" font-family="Inter, system-ui, sans-serif" font-size="10">✕</text>
+    </g>
+
+    <!-- Bottom-Right Square FAB (+) -->
+    <rect x="234" y="382" width="38" height="38" rx="12" fill="#10B981"/>
+    <text x="247" y="407" fill="#052E16" font-family="Inter, system-ui, sans-serif" font-size="18" font-weight="700">+</text>
+
+    <!-- Bottom Gesture Pill -->
+    <rect x="104" y="434" width="80" height="4" rx="2" fill="#334155"/>
   </g>
 </svg>
