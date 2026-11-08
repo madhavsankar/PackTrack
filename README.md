@@ -81,6 +81,7 @@ flowchart TB
         CreateAPI["POST /api/trips/create\n(3-Stage Interview -> Build Checklist)"]:::api
         RecreateAPI["POST /api/trips/recreate\n(Refresh Weather & Re-evaluate Rules)"]:::api
         McpAPI["POST /mcp\n(JSON-RPC 2.0 Packing Tools)"]:::api
+        McpAPI --> CreateAPI & StateAPI
     end
 
     subgraph ExternalServices["🌦️ External AI & Weather Services"]
@@ -91,18 +92,15 @@ flowchart TB
     subgraph Storage["🗄️ Local-First & Cloud Persistence"]
         RoomDB[("📱 Android Room SQLite\n(Offline-First Flights DB)")]:::db
         FirestoreDB[("🔥 Firebase Cloud Firestore\n(packtrack_state/user_state_{userId})")]:::db
+        RoomDB <-->|"Background Cloud Sync"| FirestoreDB
     end
 
+    Touchpoints -->|"Bearer <Google_ID_Token>"| AuthGate
+    AuthGate -->|"Verified User"| MajorAPIs
+
     Android <-->|"100% Offline Read/Write"| RoomDB
-    RoomDB <-->|"Background Cloud Sync"| FirestoreDB
-
-    WebPWA & Android & McpClient -->|"Bearer <Google_ID_Token>"| AuthGate
-    AuthGate --> StateAPI & CreateAPI & RecreateAPI & McpAPI
-
     CreateAPI & RecreateAPI -->|"1. Fetch Exact-Date Forecast"| OpenMeteo
     CreateAPI & RecreateAPI -->|"2. Evaluate Template Rules + Suggest Items"| GeminiCascade
-    McpAPI --> CreateAPI & StateAPI
-
     StateAPI & CreateAPI & RecreateAPI <-->|"REST GET / PATCH"| FirestoreDB
 ```
 
