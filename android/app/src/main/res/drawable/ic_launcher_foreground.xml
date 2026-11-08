@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- Top Suitcase Handle -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M43,36V29c0,-2.2 1.8,-4 4,-4h14c2.2,0 4,1.8 4,4v7" />
+
+    <!-- Main Travel Suitcase Body -->
+    <path
+        android:fillColor="#1E293B"
+        android:strokeColor="#38BDF8"
+        android:strokeWidth="4"
+        android:pathData="M31,36h46c3.3,0 6,2.7 6,6v32c0,3.3 -2.7,6 -6,6H31c-3.3,0 -6,-2.7 -6,-6V42c0,-3.3 2.7,-6 6,-6z" />
+
+    <!-- Suitcase Straps -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#334155"
+        android:strokeWidth="2.5"
+        android:pathData="M39,36v44M69,36v44" />
+
+    <!-- Green Packing Checkmark Badge in Center -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#22C55E"
+        android:strokeWidth="5.5"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round"
+        android:pathData="M43,58l8,8l16,-16" />
+
+    <!-- Gold AI Sparkle Star at Top Right -->
+    <path
+        android:fillColor="#FBBF24"
+        android:pathData="M78,22l2.2,5.3l5.3,2.2l-5.3,2.2l-2.2,5.3l-2.2,-5.3l-5.3,-2.2l5.3,-2.2z" />
+</vector>
+

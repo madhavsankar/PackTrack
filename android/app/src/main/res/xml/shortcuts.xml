@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Long-press App Icon or Assistant Shortcut 1: Talk to Gemini in PackTrack -->
+    <shortcut
+        android:shortcutId="voice_plan_trip"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_voice_short"
+        android:shortcutLongLabel="@string/shortcut_voice_long">
+        <intent
+            android:action="com.packtrack.app.ACTION_START_VOICE"
+            android:targetPackage="com.packtrack.app"
+            android:targetClass="com.packtrack.app.MainActivity" />
+        <categories android:name="android.shortcut.conversation" />
+    </shortcut>
+
+    <!-- Long-press App Icon or Assistant Shortcut 2: 60-Second Doorway Check -->
+    <shortcut
+        android:shortcutId="doorway_check"
+        android:enabled="true"
+        android:shortcutShortLabel="@string/shortcut_doorway_short"
+        android:shortcutLongLabel="@string/shortcut_doorway_long">
+        <intent
+            android:action="com.packtrack.app.ACTION_DOORWAY_CHECK"
+            android:targetPackage="com.packtrack.app"
+            android:targetClass="com.packtrack.app.MainActivity" />
+    </shortcut>
+
+    <!-- Google Assistant / Gemini on Android Built-In Intent (BII) capability -->
+    <capability android:name="actions.intent.OPEN_APP_FEATURE">
+        <intent
+            android:action="com.packtrack.app.ACTION_START_VOICE"
+            android:targetPackage="com.packtrack.app"
+            android:targetClass="com.packtrack.app.MainActivity">
+            <parameter
+                android:name="feature"
+                android:key="feature" />
+        </intent>
+    </capability>
+</shortcuts>
+

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.db
+.venv/
+
+# Android / Gradle
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+local.properties
+google-services.json
+android/app/google-services.json
+*.jks
+*.keystore
+*.apk
+*.iml
+.DS_Store
+

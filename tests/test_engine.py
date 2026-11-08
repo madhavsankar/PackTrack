@@ -1,0 +1,501 @@
+"""Unit tests for PackTrack Weather, Gap Questions, Starter Template, DB, and Gemini Voice Agent."""
+
+import os
+import tempfile
+import unittest
+from packtrack.weather import fetch_destination_weather
+from packtrack.engine import generate_gap_questions, build_complete_checklist
+from packtrack.db import PackTrackDB
+from packtrack.gemini_agent import GeminiVoiceAgent
+
+
+class TestPackTrackEngine(unittest.TestCase):
+    def setUp(self):
+        self.tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+        self.tmp_db.close()
+        self.db = PackTrackDB(self.tmp_db.name)
+
+    def tearDown(self):
+        if os.path.exists(self.tmp_db.name):
+            os.remove(self.tmp_db.name)
+
+    def test_weather_and_international_detection(self):
+        weather = fetch_destination_weather("London", duration_days=5, home_country_code="US")
+        self.assertEqual(weather.destination_name, "London")
+        self.assertTrue(weather.is_international)
+        self.assertIn("Type G", weather.plug_types)
+        self.assertEqual(len(weather.daily_forecasts), 5)
+
+    def test_template_categories_and_vehicle_rules(self):
+        profile = self.db.get_profile()
+        weather = fetch_destination_weather("Seattle", duration_days=6, home_country_code="US")
+        questions = generate_gap_questions(weather, profile, initial_tags=[])
+        q_ids = [q["id"] for q in questions]
+        self.assertIn("car_mode", q_ids)
+        self.assertIn("trip_purpose", q_ids)
+
+        # Case A: Rental Vehicle + Work Trip
+        items_rental = build_complete_checklist(
+            trip_id=1,
+            weather=weather,
+            profile=profile,
+            selected_tags=["work", "rental_car"],
+            do_laundry=False,
+        )
+        names_rental = {i["name"] for i in items_rental}
+        self.assertIn("House Keys", names_rental)
+        self.assertIn("Payment Card / Cash", names_rental)
+        self.assertIn("Photo ID / Driver's License", names_rental)
+        self.assertIn("Passport / Travel Document", names_rental)
+        self.assertIn("Booking & Itinerary Confirmations", names_rental)
+        self.assertIn("Vehicle USB Data Cable (Navigation / Audio)", names_rental)
+        self.assertIn("Primary Device Charger", names_rental)
+        self.assertIn("Work Device", names_rental)
+        self.assertIn("Work ID / Access Badge", names_rental)
+        self.assertIn("Packing Cubes / Organizer Bags", names_rental)
+        self.assertIn("Personal First-Aid & Medication Kit", names_rental)
+        self.assertNotIn("Vehicle Registration & Insurance Docs", names_rental)
+
+        # Case B: Own Vehicle Trip -> Registration & Insurance added instead of Rental Cable
+        items_own_car = build_complete_checklist(
+            trip_id=2,
+            weather=weather,
+            profile=profile,
+            selected_tags=["own_car"],
+            do_laundry=False,
+        )
+        names_own = {i["name"] for i in items_own_car}
+        self.assertIn("Vehicle Registration & Insurance Docs", names_own)
+        self.assertNotIn("Vehicle USB Data Cable (Navigation / Audio)", names_own)
+
+        # Verify Underwear, Socks, and T-Shirts scale to duration + 1 (6 + 1 = 7)
+        underwear = next(i for i in items_rental if i["name"] == "Underwear")
+        tshirts = next(i for i in items_rental if i["name"] == "T-Shirts")
+        self.assertEqual(underwear["quantity"], 7)
+        self.assertEqual(tshirts["quantity"], 7)
+
+    def test_voice_agent_workflow_creates_and_checks_items(self):
+        agent = GeminiVoiceAgent()
+        # Step 1: User speaks destination + duration
+        turn1 = agent.handle_turn("I'm going to Tokyo for 6 days", session_id="test_voice")
+        self.assertIn("Tokyo", turn1["reply"])
+
+        # Step 2: User answers clarifying question ("work and rental car")
+        turn2 = agent.handle_turn("It's for work with a rental car", session_id="test_voice")
+        self.assertIsNotNone(turn2["updated_trip"])
+        trip_id = turn2["updated_trip"]["id"]
+
+        # Step 3: User checks off items by voice
+        turn3 = agent.handle_turn(
+            "Mark keys, passport, and charger packed",
+            session_id="test_voice",
+            active_trip_id=trip_id,
+        )
+        packed_items = [i["name"] for i in turn3["updated_trip"]["items"] if i["packed_outbound"]]
+        self.assertTrue(any("Keys" in n for n in packed_items))
+        self.assertTrue(any("Passport" in n for n in packed_items))
+        self.assertTrue(any("Charger" in n for n in packed_items))
+
+    def test_eval_work_selected_adds_laptop_to_final_list(self):
+        """Eval: Whenever work is selected and a rule states 'if work is expcted to be done', Laptop must be in final list."""
+        weather = fetch_destination_weather("Seattle", duration_days=4, home_country_code="US")
+        condition_variants = [
+            "if work is expcted to be done",
+            "if work is expected to be done",
+            "Only when working",
+            "work",
+        ]
+
+        for cond in condition_variants:
+            custom_rules = [
+                {"moduleKey": "Always", "name": "Phones", "category": "On Me"},
+                {
+                    "moduleKey": cond,
+                    "name": "Laptop",
+                    "category": "Electronics",
+                    "isDoorwayCritical": True,
+                    "bagLocation": "Personal",
+                },
+            ]
+
+            # When work is selected -> Laptop must be in final list
+            items_work = build_complete_checklist(
+                trip_id=100,
+                weather=weather,
+                profile={"custom_rules": custom_rules},
+                selected_tags=["work", "rental_car"],
+            )
+            names_work_lower = {i["name"].lower() for i in items_work}
+            self.assertIn(
+                "laptop",
+                names_work_lower,
+                f"Expected 'Laptop' in final list when work is selected for rule condition '{cond}'",
+            )
+
+            # When leisure is selected (work not selected) -> Laptop must NOT be in final list
+            items_leisure = build_complete_checklist(
+                trip_id=101,
+                weather=weather,
+                profile={"custom_rules": custom_rules},
+                selected_tags=["leisure", "rental_car"],
+            )
+            names_leisure_lower = {i["name"].lower() for i in items_leisure}
+            self.assertNotIn(
+                "laptop",
+                names_leisure_lower,
+                f"Expected 'Laptop' to be excluded when work is NOT selected for rule condition '{cond}'",
+            )
+
+        # Also verify single-string natural-language rule: "if work is expcted to be done, laptop should be added"
+        nl_rules = [
+            {
+                "moduleKey": "Always",
+                "name": "if work is expcted to be done, laptop should be added",
+                "category": "Electronics",
+            }
+        ]
+        items_nl_work = build_complete_checklist(
+            trip_id=102,
+            weather=weather,
+            profile={"custom_rules": nl_rules},
+            selected_tags=["work"],
+        )
+        self.assertIn("laptop", {i["name"].lower() for i in items_nl_work})
+
+        items_nl_leisure = build_complete_checklist(
+            trip_id=103,
+            weather=weather,
+            profile={"custom_rules": nl_rules},
+            selected_tags=["leisure"],
+        )
+        self.assertNotIn("laptop", {i["name"].lower() for i in items_nl_leisure})
+
+    def test_eval_cloudflare_packing_engine_work_laptop_rule(self):
+        """Eval: Verifies Cloudflare PackingEngineService adds Laptop when work is selected and rule says 'if work is expcted to be done'."""
+        import json
+        import shutil
+        import subprocess
+
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        engine_js_path = os.path.join(root_dir, "cloudflare", "src", "services", "PackingEngineService.js")
+        with open(engine_js_path, "r", encoding="utf-8") as f:
+            engine_src = f.read().replace("export class PackingEngineService", "class PackingEngineService")
+
+        eval_harness = (
+            engine_src
+            + """
+        const weather = {
+          city: 'Seattle',
+          country: 'United States',
+          countryCode: 'US',
+          avgHighF: 64,
+          avgLowF: 49,
+          rainyDaysCount: 2,
+          plugTypes: 'Type A/B',
+          isInternational: false,
+          dailyBreakdown: ['Day 1: 49°F–64°F, Rain']
+        };
+        const rules = [
+          { moduleKey: 'Always', name: 'Phones', category: 'On Me' },
+          { moduleKey: 'if work is expcted to be done', name: 'Laptop', category: 'Electronics' },
+          { moduleKey: 'Always', name: 'if work is expected to be done, laptop charger should be added', category: 'Electronics' }
+        ];
+        const workItems = PackingEngineService.buildTripChecklist({
+          weather,
+          durationDays: 4,
+          tags: ['work', 'rental_car', 'carry_on'],
+          customRules: rules
+        });
+        const leisureItems = PackingEngineService.buildTripChecklist({
+          weather,
+          durationDays: 4,
+          tags: ['leisure', 'rental_car', 'carry_on'],
+          customRules: rules
+        });
+        const out = JSON.stringify({
+          workNames: workItems.map(i => i.name),
+          leisureNames: leisureItems.map(i => i.name)
+        });
+        if (typeof console !== 'undefined' && console.log) console.log(out);
+        else if (typeof print !== 'undefined') print(out);
+        """
+        )
+
+        node_bin = shutil.which("node")
+        jsc_bin = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        cmd = [node_bin, "-e", eval_harness] if node_bin else [jsc_bin, "-e", eval_harness]
+        proc = subprocess.run(cmd, cwd=root_dir, capture_output=True, text=True, check=True)
+        data = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertIn("Laptop", data["workNames"])
+        self.assertIn("Laptop charger", data["workNames"])
+        self.assertNotIn("Laptop", data["leisureNames"])
+        self.assertNotIn("Laptop charger", data["leisureNames"])
+
+    def test_eval_gemini_request_and_response_schema_validation(self):
+        """Eval: Verifies the outbound Gemini request payload schema and inbound response parser/validator."""
+        import json
+        import shutil
+        import subprocess
+
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        engine_js_path = os.path.join(root_dir, "cloudflare", "src", "services", "PackingEngineService.js")
+        with open(engine_js_path, "r", encoding="utf-8") as f:
+            engine_src = f.read().replace("export class PackingEngineService", "class PackingEngineService")
+
+        eval_harness = (
+            engine_src
+            + """
+        const weather = {
+          city: 'Seattle',
+          country: 'United States',
+          countryCode: 'US',
+          avgHighF: 64,
+          avgLowF: 49,
+          rainyDaysCount: 2,
+          plugTypes: 'Type A/B',
+          isInternational: false,
+          dailyBreakdown: ['Day 1 (2026-11-08): 48°F–61°F, Rain (80% precip)']
+        };
+        const templateItems = [
+          { name: 'Laptop', quantity: 1, category: 'Electronics' },
+          { name: 'Phones', quantity: 1, category: 'On Me' },
+          { name: 'DSLR Body', quantity: 1, category: 'Camera Gear' }
+        ];
+        const reqPayload = PackingEngineService.buildGeminiSuggestionRequestPayload({
+          weather,
+          durationDays: 4,
+          tags: ['work', 'rental_car'],
+          templateItems,
+          customCategories: ['Gym']
+        });
+
+        const mockGeminiApiResponse = {
+          candidates: [{
+            content: {
+              parts: [{
+                text: JSON.stringify([
+                  { name: 'Laptop', category: 'Electronics', quantity: 1, bagLocation: 'Personal', reason: 'Duplicate of template item' },
+                  { name: 'Rain Cover for Lens', category: 'Camera Gear', quantity: 1, bagLocation: 'Carry-On', reason: 'We expect rain on Day 1 (80% precip)' },
+                  { name: 'Warm Fleece', category: 'InvalidCategory', quantity: -3, bagLocation: 'InvalidBag', reason: '[SUGGESTED] Chilly 48°F low' }
+                ])
+              }]
+            }
+          }]
+        };
+        const parsed = PackingEngineService.parseGeminiSuggestionResponse(mockGeminiApiResponse, {
+          existingNames: new Set(['laptop', 'phones', 'dslr body']),
+          city: 'Seattle',
+          allowedCategories: ['Camera Gear', 'Gym']
+        });
+
+        const out = JSON.stringify({ reqPayload, parsed });
+        if (typeof console !== 'undefined' && console.log) console.log(out);
+        else if (typeof print !== 'undefined') print(out);
+        """
+        )
+
+        node_bin = shutil.which("node")
+        jsc_bin = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        cmd = [node_bin, "-e", eval_harness] if node_bin else [jsc_bin, "-e", eval_harness]
+        proc = subprocess.run(cmd, cwd=root_dir, capture_output=True, text=True, check=True)
+        result = json.loads(proc.stdout.strip().splitlines()[-1])
+
+        req = result["reqPayload"]
+        self.assertEqual(req["generationConfig"]["responseMimeType"], "application/json")
+        schema = req["generationConfig"]["responseSchema"]
+        self.assertEqual(schema["type"], "ARRAY")
+        self.assertEqual(
+            set(schema["items"]["required"]),
+            {"name", "category", "quantity", "bagLocation", "reason"},
+        )
+        # Custom categories ('Camera Gear', 'Gym') must be dynamically allowed in the responseSchema enum
+        cat_enum = schema["items"]["properties"]["category"]["enum"]
+        self.assertIn("Camera Gear", cat_enum)
+        self.assertIn("Gym", cat_enum)
+
+        parsed = result["parsed"]
+        # 'Laptop' duplicate must be filtered out; 2 valid suggestions remain
+        self.assertEqual(len(parsed), 2)
+        self.assertEqual(parsed[0]["name"], "Rain Cover for Lens")
+        self.assertEqual(parsed[0]["category"], "Camera Gear")
+        self.assertEqual(parsed[0]["bagLocation"], "Carry-On")
+        self.assertTrue(parsed[0]["weatherReason"].startswith("[SUGGESTED] "))
+
+        # Invalid category/bag/quantity are normalized safely
+        self.assertEqual(parsed[1]["name"], "Warm Fleece")
+        self.assertEqual(parsed[1]["category"], "Others")
+        self.assertEqual(parsed[1]["bagLocation"], "Carry-On")
+        self.assertEqual(parsed[1]["quantity"], 1)
+        self.assertEqual(parsed[1]["weatherReason"], "[SUGGESTED] Chilly 48°F low")
+
+    def test_eval_complex_compound_rule_rain_more_than_5_days_and_india(self):
+        """Eval: Verifies compound rule 'Only add this when there is atleast one rainy and and if trip is for more than 5 days and n=only when we go to India'."""
+        from packtrack.models import DestinationWeatherSummary
+
+        complex_cond = (
+            "Only add this when there is atleast one rainy and and if trip is for more than 5 days "
+            "and n=only when we go to India"
+        )
+        rules = [
+            {
+                "moduleKey": complex_cond,
+                "name": "Monsoon Trekking Poncho",
+                "category": "Clothes",
+            }
+        ]
+
+        india_rainy_7d = DestinationWeatherSummary(
+            destination_name="Mumbai",
+            country="India",
+            country_code="IN",
+            latitude=19.07,
+            longitude=72.87,
+            start_date="2026-11-10",
+            duration_days=7,
+            avg_high_f=86.0,
+            avg_low_f=74.0,
+            avg_high_c=30.0,
+            avg_low_c=23.0,
+            rainy_days_count=2,
+            snowy_days_count=0,
+            max_precip_prob=80,
+            is_international=True,
+            plug_types="Type C/D/M",
+            currency="INR",
+        )
+
+        # 1. All 3 conditions met (India + 7 days > 5 + 2 rainy days >= 1) -> Included
+        items_match = build_complete_checklist(
+            trip_id=200,
+            weather=india_rainy_7d,
+            profile={"custom_rules": rules},
+            selected_tags=["leisure"],
+        )
+        self.assertIn("Monsoon Trekking Poncho", {i["name"] for i in items_match})
+
+        # 2. Only 4 days (fails 'more than 5 days') -> Excluded
+        india_rainy_4d = DestinationWeatherSummary(**{**india_rainy_7d.to_dict(), "duration_days": 4})
+        items_short = build_complete_checklist(
+            trip_id=201,
+            weather=india_rainy_4d,
+            profile={"custom_rules": rules},
+            selected_tags=["leisure"],
+        )
+        self.assertNotIn("Monsoon Trekking Poncho", {i["name"] for i in items_short})
+
+        # 3. 0 rainy days (fails 'atleast one rainy') -> Excluded
+        india_dry_7d = DestinationWeatherSummary(**{**india_rainy_7d.to_dict(), "rainy_days_count": 0})
+        items_dry = build_complete_checklist(
+            trip_id=202,
+            weather=india_dry_7d,
+            profile={"custom_rules": rules},
+            selected_tags=["leisure"],
+        )
+        self.assertNotIn("Monsoon Trekking Poncho", {i["name"] for i in items_dry})
+
+        # 4. Destination is Seattle, US (fails 'when we go to India') -> Excluded
+        us_rainy_7d = DestinationWeatherSummary(
+            **{
+                **india_rainy_7d.to_dict(),
+                "destination_name": "Seattle",
+                "country": "United States",
+                "country_code": "US",
+            }
+        )
+        items_us = build_complete_checklist(
+            trip_id=203,
+            weather=us_rainy_7d,
+            profile={"custom_rules": rules},
+            selected_tags=["leisure"],
+        )
+        self.assertNotIn("Monsoon Trekking Poncho", {i["name"] for i in items_us})
+
+    def test_eval_generalized_model_cascade_discovery_and_failover(self):
+        """Eval: Verifies generalized model ranking (e.g. future 4.3 and 3.2 models) and automatic cascade failover."""
+        import json
+        import shutil
+        import subprocess
+
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        engine_js_path = os.path.join(root_dir, "cloudflare", "src", "services", "PackingEngineService.js")
+        with open(engine_js_path, "r", encoding="utf-8") as f:
+            engine_src = f.read().replace("export class PackingEngineService", "class PackingEngineService")
+
+        eval_harness = (
+            engine_src
+            + """
+        (async () => {
+          const mockModelsApi = [
+            { name: 'models/text-embedding-004', supportedGenerationMethods: ['embedContent'] },
+            { name: 'models/gemma-4-31b-it', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-3.1-flash-image', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-3-pro-image', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-omni-1.1-flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-2.5-flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-4-argon', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-3.2-flash-lite', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-4.3-flash', supportedGenerationMethods: ['generateContent'] },
+            { name: 'models/gemini-3.8-flash-tts', supportedGenerationMethods: ['generateContent'] }
+          ];
+          const ranked = PackingEngineService.rankModelsFromList(mockModelsApi);
+
+          // Simulate cascade failover: 1st model ('gemini-4.3-flash') returns 429 rate-limit,
+          // next models fail until 'gemini-3.2-flash-lite' succeeds with 200 OK!
+          const attempted = [];
+          const mockFetch = async (url) => {
+            const m = url.match(/models\\/([^:?]+):generateContent/);
+            const modelId = m ? decodeURIComponent(m[1]) : 'unknown';
+            attempted.push(modelId);
+            if (modelId === 'gemini-3.2-flash-lite') {
+              return {
+                ok: true,
+                json: async () => ({
+                  candidates: [{ content: { parts: [{ text: '[{"name":"Umbrella","category":"Others","quantity":1,"bagLocation":"Carry-On","reason":"Rain expected"}]' }] } }]
+                })
+              };
+            }
+            return { ok: false, status: 429 };
+          };
+
+          const res = await PackingEngineService.callGeminiWithModelCascade(
+            { contents: [] },
+            'test-key',
+            { fetchImpl: mockFetch, cascadeOverride: ranked }
+          );
+
+          const out = JSON.stringify({
+            firstModel: ranked[0],
+            ranked,
+            hasNonTextOrLegacy: ranked.some(id =>
+              ['text-embedding-004', 'gemma-4-31b-it', 'gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-omni-1.1-flash', 'gemini-2.5-flash', 'gemini-3.8-flash-tts'].includes(id)
+            ),
+            attempted,
+            modelUsed: res ? res.modelUsed : null
+          });
+          if (typeof console !== 'undefined' && console.log) console.log(out);
+          else if (typeof print !== 'undefined') print(out);
+        })();
+        """
+        )
+
+        node_bin = shutil.which("node")
+        jsc_bin = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        cmd = [node_bin, "-e", eval_harness] if node_bin else [jsc_bin, "-e", eval_harness]
+        proc = subprocess.run(cmd, cwd=root_dir, capture_output=True, text=True, check=True)
+        result = json.loads(proc.stdout.strip().splitlines()[-1])
+
+        self.assertEqual(result["firstModel"], "gemini-4.3-flash")
+        self.assertFalse(result["hasNonTextOrLegacy"])
+        self.assertLess(
+            result["ranked"].index("gemini-4.3-flash"),
+            result["ranked"].index("gemini-3.2-flash-lite"),
+        )
+        self.assertLess(
+            result["ranked"].index("gemini-3.2-flash-lite"),
+            result["ranked"].index("gemini-4-argon"),
+        )
+        self.assertEqual(result["modelUsed"], "gemini-3.2-flash-lite")
+
+
+if __name__ == "__main__":
+    unittest.main()

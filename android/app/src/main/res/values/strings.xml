@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">PackTrack</string>
+    <string name="widget_description">1-Tap Gemini Voice Trip Planner &amp; 60-Second Doorway Check</string>
+    <string name="shortcut_voice_short">🎙️ Gemini Voice</string>
+    <string name="shortcut_voice_long">Talk to Gemini to plan or check off packing</string>
+    <string name="shortcut_doorway_short">🚪 Doorway Check</string>
+    <string name="shortcut_doorway_long">60-Second Must-Have Departure Check</string>
+</resources>
+
