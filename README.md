@@ -24,99 +24,90 @@ An open-source, AI-powered trip packing and lifecycle tracking assistant backed 
 
 ---
 
-## High-Level Design (HLD) & Architecture
+## App Screens & Usage Pattern (Critical User Journey)
 
-### 1. System Architecture
+<p align="center">
+  <img src="assets/app_screens.svg" width="100%" alt="PackTrack App Screens — Home Dashboard, 3-Stage Gemini Trip Interview, and 3-Mode Packing Checklist" />
+</p>
+
+### 1. App Usage Pattern (CUJ Flow)
+
+```mermaid
+flowchart LR
+    classDef userNode fill:#065f46,stroke:#10b981,stroke-width:2px,color:#ecfdf5,font-weight:bold
+    classDef authNode fill:#1e1b4b,stroke:#818cf8,stroke-width:2px,color:#e0e7ff,font-weight:bold
+    classDef screenNode fill:#0f172a,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff
+    classDef aiNode fill:#3b0764,stroke:#c084fc,stroke-width:2px,color:#faf5ff,font-weight:bold
+    classDef modeNode fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#fef3c7
+    classDef dbNode fill:#083344,stroke:#22d3ee,stroke-width:2.5px,color:#ecfeff,font-weight:bold
+
+    Start(["👤 Open Web or Android App"]):::userNode --> Auth{{"🔐 Google Sign-In Gate\n(OAuth JWT + Allowlist)"}}:::authNode
+    Auth -->|"Verified Email"| Home(["🏠 Home Dashboard\n(Saved Trips + Default Template)"]):::screenNode
+
+    Home -->|"Tap + New Trip"| Stage1(["📍 Stage 1: Destination & Dates\n+ Live Open-Meteo Weather"]):::screenNode
+    Stage1 --> Stage23(["🚗 Stage 2 & 3: Car Mode,\nWork/Leisure & Luggage Space"]):::screenNode
+
+    Stage23 --> GeminiEval[["🤖 Gemini Structured Output\n(Evaluate Rules + Weather Suggestions)"]]:::aiNode
+    GeminiEval --> Checklist(["✅ Trip Checklist Screen\n(+ Collapsible AI Suggestions)"]):::screenNode
+
+    Checklist --> Modes{"🔄 3 Lifecycle Modes"}:::modeNode
+    Modes -->|"Phase 1"| Outbound(["🧳 Pack Outbound\n(Scaled by Days & Weather)"]):::userNode
+    Modes -->|"Phase 2"| Doorway(["🚪 60s Doorway Check\n(Critical Essentials Only)"]):::userNode
+    Modes -->|"Phase 3"| Hotel(["🏨 Hotel Checkout Sweep\n(High-Loss Return Items)"]):::userNode
+
+    Checklist -->|"Long-Press Any Item:\n⭐ Save to Default Template"| Firestore[("🗄️ Room SQLite &\nCloud Firestore DB")]:::dbNode
+    Outbound & Doorway & Hotel --> Firestore
+```
+
+---
+
+## High-Level Design (Website & App Major APIs)
 
 ```mermaid
 flowchart TB
-    subgraph Clients["User Touchpoints and Clients"]
-        AndroidUI["Native Android App (HomeScreen, GeminiInterviewScreen, TripChecklistScreen, TemplateEditorScreen)"]
-        Widget["Android Home Widget and Share Target (ACTION_SEND, packtrack://create)"]
-        EdgePWA["Cloudflare Edge Web App (cloudflare/src/ui/WebAppView.js)"]
-        ExternalMCP["External MCP Clients (Gemini CLI, Claude, IDE Agents)"]
+    classDef client fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#ecfdf5,font-weight:bold
+    classDef gate fill:#311042,stroke:#e879f9,stroke-width:2px,color:#fdf4ff,font-weight:bold
+    classDef api fill:#0c4a6e,stroke:#38bdf8,stroke-width:2px,color:#f0f9ff
+    classDef ext fill:#3b0764,stroke:#a855f7,stroke-width:2px,color:#f3e8ff,font-weight:bold
+    classDef weather fill:#0c4a6e,stroke:#7dd3fc,stroke-width:2px,color:#e0f2fe,font-weight:bold
+    classDef db fill:#164e63,stroke:#06b6d4,stroke-width:2.5px,color:#ecfeff,font-weight:bold
+
+    subgraph Touchpoints["📱 Client Touchpoints"]
+        WebPWA(["🌐 Cloudflare Web App\n(Responsive PWA)"]):::client
+        Android(["🤖 Native Android App\n(Jetpack Compose + Home Widget)"]):::client
+        McpClient(["🔌 MCP Agent\n(Claude / Gemini CLI)"]):::client
     end
 
-    subgraph AndroidRuntime["Android Application Layer (android/app/src/main/java/com/packtrack/app/)"]
-        MainAct["MainActivity (Intent Router, Room Init, Firebase Analytics, TTS)"]
-        VoiceAsst["GeminiVoiceAssistant (agent/GeminiVoiceAssistant.kt)"]
-        Calc["ChecklistCalculator (domain/ChecklistCalculator.kt)"]
-        Catalog["TravelerTemplateCatalog (domain/TravelerTemplateCatalog.kt)"]
-        WeatherKt["OpenMeteoWeatherService (data/OpenMeteoWeatherService.kt)"]
-        SyncKt["FirestoreSyncService (data/FirestoreSyncService.kt)"]
+    AuthGate{{"🔐 Google OAuth JWT Verifier\n(oauth2.googleapis.com/tokeninfo + ALLOWED_EMAILS)"}}:::gate
+
+    subgraph MajorAPIs["⚡ Cloudflare Worker & App Major APIs"]
+        StateAPI["GET & POST /api/state\n(Load / Save Trips & Default Template)"]:::api
+        CreateAPI["POST /api/trips/create\n(3-Stage Interview -> Build Checklist)"]:::api
+        RecreateAPI["POST /api/trips/recreate\n(Refresh Weather & Re-evaluate Rules)"]:::api
+        McpAPI["POST /mcp\n(JSON-RPC 2.0 Packing Tools)"]:::api
     end
 
-    subgraph EdgeRuntime["Cloudflare Worker Edge Runtime (cloudflare/)"]
-        HttpRouter["HttpRouter (controllers/HttpRouter.js)"]
-        EdgeEngine["PackingEngineService (services/PackingEngineService.js)"]
-        EdgeMcp["McpRouter JSON-RPC 2.0 (mcp/McpRouter.js)"]
-        FirestoreRepo["FirestoreRepository (repositories/FirestoreRepository.js)"]
+    subgraph ExternalServices["🌦️ External AI & Weather Services"]
+        OpenMeteo[["🌤️ Open-Meteo Forecast API\n(Geocoding + 16-Day High/Low & Rain)"]]:::weather
+        GeminiCascade[["🤖 Google Gemini API Cascade\n(/v1beta/models -> Structured JSON Schema)"]]:::ext
     end
 
-    subgraph ExternalAPIs["External AI and Weather APIs"]
-        ModelsAPI["Gemini Model Discovery (GET /v1beta/models)"]
-        GeminiCascade["Gemini Cascade (gemini-3.8-flash -> gemini-3.6-flash -> gemini-3.5-flash-lite -> gemini-3.1-flash-lite)"]
-        RuleFallback["Multi-Clause Deterministic Rule Evaluator (ChecklistCalculator / PackingEngineService)"]
-        OpenMeteo["Open-Meteo Geocoding and 16-Day Weather Forecast API"]
-        ModelsAPI -->|"5-Stage Modality & Tier Scorer"| GeminiCascade
-        GeminiCascade -->|"HTTP 429/5xx or Offline Fallback + Warning Banner"| RuleFallback
+    subgraph Storage["🗄️ Local-First & Cloud Persistence"]
+        RoomDB[("📱 Android Room SQLite\n(Offline-First Flights DB)")]:::db
+        FirestoreDB[("🔥 Firebase Cloud Firestore\n(packtrack_state/user_state_{userId})")]:::db
     end
 
-    subgraph Storage["Local-First SQLite and Cloud Firestore NoSQL DB"]
-        RoomDB["Android Room SQLite DB (packtrack_local.db: trips, packing_items, template_rules)"]
-        Firestore["Firebase Cloud Firestore (packtrack_state/user_state_{userId})"]
-    end
+    Android <-->|"100% Offline Read/Write"| RoomDB
+    RoomDB <-->|"Background Cloud Sync"| FirestoreDB
 
-    Widget -->|"Intents and Deep Links"| MainAct
-    MainAct --> AndroidUI
-    AndroidUI -->|"Stage 1-3 Interview and Weather Refresh"| VoiceAsst
-    AndroidUI <-->|"Reactive Kotlin Flows and Template Edits"| RoomDB
+    WebPWA & Android & McpClient -->|"Bearer <Google_ID_Token>"| AuthGate
+    AuthGate --> StateAPI & CreateAPI & RecreateAPI & McpAPI
 
-    VoiceAsst -->|"Structured Output JSON (responseSchema)"| GeminiCascade
-    VoiceAsst -->|"Fetch Forecast by Dates"| WeatherKt
-    VoiceAsst -->|"Fallback Checklist & Scaling"| Calc
-    Calc -->|"Read Starter Rules"| Catalog
-    WeatherKt -->|"HTTP GET"| OpenMeteo
-    VoiceAsst -->|"Save Trip and Items"| RoomDB
-    RoomDB <-->|"SyncKt: Pull and Push Per-User State"| Firestore
+    CreateAPI & RecreateAPI -->|"1. Fetch Exact-Date Forecast"| OpenMeteo
+    CreateAPI & RecreateAPI -->|"2. Evaluate Template Rules + Suggest Items"| GeminiCascade
+    McpAPI --> CreateAPI & StateAPI
 
-    EdgePWA -->|"REST /api/*"| HttpRouter
-    ExternalMCP -->|"Streamable HTTP /mcp"| EdgeMcp
-    HttpRouter --> EdgeEngine
-    EdgeMcp --> EdgeEngine
-    EdgeEngine -->|"Structured Output JSON (responseSchema)"| GeminiCascade
-    EdgeEngine -->|"Fetch Forecast by Dates"| OpenMeteo
-    EdgeEngine <--> FirestoreRepo
-    FirestoreRepo <-->|"REST PATCH / GET"| Firestore
-```
-
-### 2. End-to-End Trip Interview, Unified Gemini Evaluation & Lifecycle Sequence
-
-```mermaid
-sequenceDiagram
-    actor User
-    participant UI as PackTrack UI (Android / Cloudflare Web)
-    participant Engine as GeminiVoiceAssistant / PackingEngineService
-    participant Weather as Open-Meteo API
-    participant Gemini as Gemini Cascade (/v1beta/models -> generateContent)
-    participant Calc as Deterministic Fallback (ChecklistCalculator)
-    participant Store as Room SQLite + Cloud Firestore
-
-    User->>UI: Tap "+ Create New Trip" -> Enter Destination & Exact Dates (e.g. "Mumbai, 2026-11-10 to 2026-11-17")
-    UI->>Engine: Stage 1: fetchWeather("Mumbai", startDate="2026-11-10", endDate="2026-11-17")
-    Engine->>Weather: Geocode + Fetch daily high/low temps and rainy days for exact dates
-    Weather-->>UI: 74°F-86°F, 2 rainy days, Type C/D/M plug (Prompts Stage 2 & Stage 3)
-    User->>UI: Select Transport (Rental Car), Purpose (Work), and Luggage (Carry-On)
-    UI->>Engine: createAndSaveTrip(templateRules + tripContext + weatherForecast)
-    Engine->>Gemini: Single Structured-Output Call (evaluate Default Template rules + suggest 2-5 weather/trip items)
-    alt Gemini Cascade Succeeds (200 OK)
-        Gemini-->>Engine: { matchedTemplateItems: [...], suggestedItems: [...] }
-    else All Models in Cascade Fail / Offline
-        Engine->>Calc: Multi-clause deterministic evaluation + weather suggestions ([FALLBACK] tag)
-        Calc-->>Engine: Backup checklist + sets Warning Banner on UI
-    end
-    Engine->>Store: Save Trip + Active Items + [SUGGESTED] Items & Sync to Firestore
-    Store-->>UI: Open TripChecklistScreen (Pack Outbound / Doorway Check / Hotel Checkout modes)
+    StateAPI & CreateAPI & RecreateAPI <-->|"REST GET / PATCH"| FirestoreDB
 ```
 
 ---
