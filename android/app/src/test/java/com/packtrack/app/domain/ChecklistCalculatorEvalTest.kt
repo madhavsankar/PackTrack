@@ -242,5 +242,200 @@ class ChecklistCalculatorEvalTest {
         assertFalse(ranked.contains("gemini-2.5-flash"))
         assertFalse(ranked.contains("gemini-2.0-flash"))
     }
+
+    @Test
+    fun eval_luggageSpaceCapsAndQuantityScaling() {
+        val scalingRules = listOf(
+            TemplateRuleEntity(
+                userId = "eval_user",
+                moduleKey = "Always",
+                name = "Socks",
+                category = "Clothes",
+                scaleByDays = true,
+                ratioPerDay = 1.0,
+                bagLocation = "Carry-On"
+            ),
+            TemplateRuleEntity(
+                userId = "eval_user",
+                moduleKey = "Always",
+                name = "Gym Shorts",
+                category = "Gym",
+                scaleByDays = true,
+                ratioPerDay = 0.5,
+                bagLocation = "Carry-On"
+            )
+        )
+
+        // 1. Personal-only bag caps effectiveDays at 3 and reassigns Carry-On items to Personal
+        val personalOnlyItems = ChecklistCalculator.buildChecklistForTrip(
+            tripId = 30L,
+            days = 10,
+            isWork = false,
+            carMode = CarTransportMode.NO_CAR,
+            luggageSpace = LuggageSpace.PERSONAL_ONLY,
+            forecast = sampleForecast,
+            customTemplateRules = scalingRules
+        )
+        val personalSocks = personalOnlyItems.first { it.name == "Socks" }
+        val personalShorts = personalOnlyItems.first { it.name == "Gym Shorts" }
+        assertEquals(3, personalSocks.quantity)
+        assertEquals(2, personalShorts.quantity) // ceil(3 * 0.5) = 2
+        assertEquals("Personal", personalSocks.bagLocation)
+        assertEquals("Gym", personalShorts.category) // Custom category preserved
+
+        // 2. Carry-On caps effectiveDays at 6 for domestic flights
+        val carryOnItems = ChecklistCalculator.buildChecklistForTrip(
+            tripId = 31L,
+            days = 10,
+            isWork = false,
+            carMode = CarTransportMode.NO_CAR,
+            luggageSpace = LuggageSpace.CARRY_ON,
+            forecast = sampleForecast,
+            customTemplateRules = scalingRules
+        )
+        assertEquals(6, carryOnItems.first { it.name == "Socks" }.quantity)
+        assertEquals("Carry-On", carryOnItems.first { it.name == "Socks" }.bagLocation)
+
+        // 3. Personal Car (OWN_CAR) bypasses carry-on cap and scales for full 10 days
+        val ownCarItems = ChecklistCalculator.buildChecklistForTrip(
+            tripId = 32L,
+            days = 10,
+            isWork = false,
+            carMode = CarTransportMode.OWN_CAR,
+            luggageSpace = LuggageSpace.PERSONAL_ONLY,
+            forecast = sampleForecast,
+            customTemplateRules = scalingRules
+        )
+        assertEquals(10, ownCarItems.first { it.name == "Socks" }.quantity)
+        assertEquals(5, ownCarItems.first { it.name == "Gym Shorts" }.quantity)
+
+        // 4. International trips automatically upgrade to TWO_CHECKED_BAGS (full 10 days)
+        val intlItems = ChecklistCalculator.buildChecklistForTrip(
+            tripId = 33L,
+            days = 10,
+            isWork = false,
+            carMode = CarTransportMode.NO_CAR,
+            luggageSpace = LuggageSpace.CARRY_ON,
+            forecast = sampleForecast.copy(isInternational = true, country = "Japan", countryCode = "JP"),
+            customTemplateRules = scalingRules
+        )
+        assertEquals(10, intlItems.first { it.name == "Socks" }.quantity)
+    }
+
+    @Test
+    fun eval_dynamicWeatherSuggestionsAndDeduplication() {
+        // 1. Freezing + snow + rental car + high wind + international UK plug
+        val extremeForecast = sampleForecast.copy(
+            city = "Edinburgh",
+            country = "United Kingdom",
+            countryCode = "GB",
+            avgHighF = 36.0,
+            avgLowF = 26.0,
+            minLowF = 24.0,
+            maxHighF = 38.0,
+            rainyDaysCount = 3,
+            hasSnow = true,
+            maxWindMph = 28.0,
+            plugTypes = "Type G (UK 3-pin)",
+            isInternational = true,
+            dailyBreakdown = listOf("Day 1: 24°F–36°F, Snow & Rain")
+        )
+        val suggestions = ChecklistCalculator.buildDynamicWeatherSuggestions(
+            tripId = 40L,
+            carMode = CarTransportMode.RENTAL_CAR,
+            forecast = extremeForecast,
+            existingItems = emptyList()
+        )
+        val names = suggestions.map { it.name }
+        assertTrue(names.contains("Raincoat / Compact Umbrella"))
+        assertTrue(names.contains("Ice Scraper / Snow Tire Check"))
+        assertTrue(names.contains("Thermal Base Layer & Gloves"))
+        assertTrue(names.contains("Windbreaker Shell"))
+        assertTrue(names.contains("Power Adapter (Type G (UK 3-pin))"))
+        assertTrue(suggestions.all { ChecklistCalculator.isSuggested(it) })
+
+        // 2. Deduplication: when user already has an Umbrella and Power Adapter in their template, they are not suggested again
+        val existing = ChecklistCalculator.buildChecklistForTrip(
+            tripId = 41L,
+            days = 4,
+            isWork = false,
+            carMode = CarTransportMode.NO_CAR,
+            forecast = extremeForecast,
+            customTemplateRules = listOf(
+                TemplateRuleEntity(userId = "u", moduleKey = "Always", name = "Compact Umbrella", category = "Others"),
+                TemplateRuleEntity(userId = "u", moduleKey = "Always", name = "Universal Power Adapter", category = "Electronics")
+            )
+        )
+        val dedupedSuggestions = ChecklistCalculator.buildDynamicWeatherSuggestions(
+            tripId = 41L,
+            carMode = CarTransportMode.NO_CAR,
+            forecast = extremeForecast,
+            existingItems = existing
+        )
+        val dedupedNames = dedupedSuggestions.map { it.name }
+        assertFalse(dedupedNames.contains("Raincoat / Compact Umbrella"))
+        assertFalse(dedupedNames.contains("Power Adapter (Type G (UK 3-pin))"))
+        assertFalse(dedupedNames.contains("Ice Scraper / Snow Tire Check")) // NO_CAR -> no ice scraper
+    }
+
+    @Test
+    fun eval_categoryCanonicalizationAndTripDateUtils() {
+        // 1. Standard & legacy category normalization + custom category preservation
+        assertEquals("On Me", PackingCategory.canonicalize("Leave-the-House Essentials"))
+        assertEquals("Docs", PackingCategory.canonicalize("documents"))
+        assertEquals("Electronics", PackingCategory.canonicalize("Tech & Chargers"))
+        assertEquals("Toiletry", PackingCategory.canonicalize("Toiletries & Health"))
+        assertEquals("Others", PackingCategory.canonicalize("Packing & Travel Gear"))
+        assertEquals("Camera Gear", PackingCategory.canonicalize("Camera Gear"))
+        assertEquals("Baby Supplies", PackingCategory.canonicalize("  Baby Supplies  "))
+
+        // 2. Relative trip date formatting & closest-to-farthest sort order
+        val today = java.time.LocalDate.of(2026, 11, 8)
+        assertEquals("Today", TripDateUtils.formatRelativeStart("2026-11-08", today))
+        assertEquals("Tomorrow", TripDateUtils.formatRelativeStart("2026-11-09", today))
+        assertEquals("In 5 days", TripDateUtils.formatRelativeStart("2026-11-13", today))
+        assertEquals("Yesterday", TripDateUtils.formatRelativeStart("2026-11-07", today))
+        assertEquals("4 days ago", TripDateUtils.formatRelativeStart("2026-11-04", today))
+
+        // Upcoming trips sort before past trips, and closer upcoming trips sort before farther ones
+        val keyToday = TripDateUtils.sortKeyClosestToFarthest("2026-11-08", today)
+        val keyIn3Days = TripDateUtils.sortKeyClosestToFarthest("2026-11-11", today)
+        val keyYesterday = TripDateUtils.sortKeyClosestToFarthest("2026-11-07", today)
+        assertTrue(keyToday < keyIn3Days)
+        assertTrue(keyIn3Days < keyYesterday)
+    }
+
+    @Test
+    fun eval_androidManifestAndBackNavigationContracts() {
+        // Locate android/app/src/main from current working directory (supports running from repo root or android/ or android/app)
+        val candidates = listOf(
+            java.io.File("src/main"),
+            java.io.File("app/src/main"),
+            java.io.File("android/app/src/main")
+        )
+        val mainDir = candidates.firstOrNull { java.io.File(it, "AndroidManifest.xml").exists() }
+            ?: throw IllegalStateException("Could not locate AndroidManifest.xml from ${java.io.File(".").absolutePath}")
+
+        val manifestText = java.io.File(mainDir, "AndroidManifest.xml").readText()
+        assertTrue("Manifest must set windowSoftInputMode=adjustResize", manifestText.contains("android:windowSoftInputMode=\"adjustResize\""))
+        assertTrue("Manifest must declare configChanges for orientation and screenSize", manifestText.contains("android:configChanges=\"orientation|screenSize|screenLayout|keyboardHidden\""))
+
+        val uiDir = java.io.File(mainDir, "java/com/packtrack/app/ui")
+        val checklistScreenText = java.io.File(uiDir, "ChecklistScreen.kt").readText()
+        assertTrue("ChecklistScreen must use rememberSaveable for state persistence", checklistScreenText.contains("rememberSaveable"))
+        assertTrue("ChecklistScreen must maintain a navigation backStack", checklistScreenText.contains("backStack"))
+        assertTrue("ChecklistScreen must register a BackHandler for non-HOME screens", checklistScreenText.contains("BackHandler(enabled = currentScreen != AppScreen.HOME)"))
+
+        val homeScreenText = java.io.File(uiDir, "HomeScreen.kt").readText()
+        assertTrue("HomeScreen must close open navigation drawer on Back press", homeScreenText.contains("BackHandler(enabled = drawerState.isOpen)"))
+        assertTrue("HomeScreen must use FlowRow so badges wrap on narrow screens", homeScreenText.contains("FlowRow("))
+
+        val interviewScreenText = java.io.File(uiDir, "GeminiInterviewScreen.kt").readText()
+        assertTrue("GeminiInterviewScreen must step back through interview stages on Back press", interviewScreenText.contains("fun handleStepBack()"))
+        assertTrue("GeminiInterviewScreen must register BackHandler calling handleStepBack", interviewScreenText.contains("BackHandler(enabled = !isBusy)"))
+
+        val tripChecklistText = java.io.File(uiDir, "TripChecklistScreen.kt").readText()
+        assertTrue("TripChecklistScreen must use FlowRow for responsive header badges", tripChecklistText.contains("FlowRow("))
+    }
 }
 

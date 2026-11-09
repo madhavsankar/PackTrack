@@ -53,7 +53,10 @@ jobs:
           echo "${GRADLE_DIR}/bin" >> $GITHUB_PATH
           "${GRADLE_DIR}/bin/gradle" --version
 
-      - name: Build Signed Release or Debug APK
+      - name: Run Python, Cloudflare & Android Architecture Regression Evals
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Run Unit Tests & Build Signed Release or Debug APK
         working-directory: android
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
@@ -74,9 +77,9 @@ jobs:
             export KEYSTORE_FILE="release-keystore.jks"
             export KEY_ALIAS="${KEY_ALIAS:-upload}"
             export KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
-            GRADLE_TASK="assembleRelease"
+            GRADLE_TASK="testDebugUnitTest assembleRelease"
           else
-            GRADLE_TASK="assembleDebug"
+            GRADLE_TASK="testDebugUnitTest assembleDebug"
           fi
           for attempt in 1 2 3; do
             gradle $GRADLE_TASK --no-daemon && break

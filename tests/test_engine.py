@@ -496,6 +496,131 @@ class TestPackTrackEngine(unittest.TestCase):
         )
         self.assertEqual(result["modelUsed"], "gemini-3.2-flash-lite")
 
+    def test_eval_db_crud_and_custom_rules_persistence(self):
+        """Eval: Verifies SQLite persistence for profiles, custom template items, trips, and item checkoff statistics."""
+        profile = self.db.add_template_item(
+            module_or_section="work",
+            item_name="Portable Monitor",
+            category="Electronics",
+            is_doorway_critical=True,
+            is_high_loss_return=True,
+        )
+        work_items = [i["name"] for i in profile["activity_modules"]["work"]["items"]]
+        self.assertIn("Portable Monitor", work_items)
+
+        weather = fetch_destination_weather("Seattle", duration_days=4, home_country_code="US")
+        items = build_complete_checklist(
+            trip_id=1,
+            weather=weather,
+            profile=profile,
+            selected_tags=["work", "rental_car"],
+        )
+        created = self.db.create_trip(weather=weather, tags=["work", "rental_car"], items=items)
+        self.assertEqual(created["destination"], "Seattle")
+        self.assertGreater(created["stats"]["total_items"], 0)
+        self.assertEqual(created["stats"]["packed_outbound"], 0)
+
+    def test_eval_webapp_back_navigation_and_responsive_ui(self):
+        """Eval: Verifies WebAppView.js back-button navigation hierarchy (modals -> drawer -> interview steps -> home) and responsive UI classes."""
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        webapp_path = os.path.join(root_dir, "cloudflare", "src", "ui", "WebAppView.js")
+        with open(webapp_path, "r", encoding="utf-8") as f:
+            webapp_src = f.read()
+
+        # 1. Verify responsive layout classes exist on header, date pickers, trip cards, and Gemini suggestions
+        self.assertIn("grid-cols-1 sm:grid-cols-2", webapp_src)
+        self.assertIn("flex-wrap", webapp_src)
+        self.assertIn("min-w-0", webapp_src)
+
+        # 2. Verify back navigation methods and popstate listener are wired in PackTrackClient
+        self.assertIn('window.addEventListener("popstate"', webapp_src)
+        self.assertIn("handleBackAction(", webapp_src)
+        self.assertIn("stepBackInterview()", webapp_src)
+        self.assertIn("closeActiveModals()", webapp_src)
+        self.assertIn("isDrawerOpen()", webapp_src)
+        self.assertIn("pushHistoryState(", webapp_src)
+
+        # 3. Verify stepBackInterview state transitions in JS runtime
+        import json
+        import shutil
+        import subprocess
+
+        start_idx = webapp_src.index("stepBackInterview() {")
+        end_idx = webapp_src.index("handleBackAction(fromPopState = false)")
+        step_back_method = webapp_src[start_idx:end_idx]
+
+        js_harness = f"""
+        const app = {{
+          currentScreen: 'interview',
+          iv: {{ step: 'WORK_PURPOSE', carMode: 'rental_car' }},
+          renderCalls: 0,
+          render() {{ this.renderCalls++; }},
+          navigateHome() {{ this.currentScreen = 'home'; }},
+          {step_back_method}
+        }};
+        const stepsVisited = [app.iv.step];
+        while (app.currentScreen === 'interview') {{
+          app.stepBackInterview();
+          stepsVisited.push(app.currentScreen === 'home' ? 'HOME' : app.iv.step);
+        }}
+
+        const ownCarApp = {{
+          currentScreen: 'interview',
+          iv: {{ step: 'WORK_PURPOSE', carMode: 'own_car' }},
+          render() {{}},
+          navigateHome() {{ this.currentScreen = 'home'; }},
+          {step_back_method}
+        }};
+        ownCarApp.stepBackInterview();
+        const ownCarPrevStep = ownCarApp.iv.step;
+
+        const out = JSON.stringify({{ stepsVisited, ownCarPrevStep }});
+        if (typeof console !== 'undefined' && console.log) console.log(out);
+        else if (typeof print !== 'undefined') print(out);
+        """
+        node_bin = shutil.which("node")
+        jsc_bin = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        cmd = [node_bin, "-e", js_harness] if node_bin else [jsc_bin, "-e", js_harness]
+        proc = subprocess.run(cmd, cwd=root_dir, capture_output=True, text=True, check=True)
+        res = json.loads(proc.stdout.strip().splitlines()[-1])
+
+        self.assertEqual(
+            res["stepsVisited"],
+            ["WORK_PURPOSE", "BAGS", "RENTAL_CAR", "FLIGHT_OR_CAR", "EXACT_DATES", "DESTINATION", "HOME"],
+        )
+        self.assertEqual(res["ownCarPrevStep"], "FLIGHT_OR_CAR")
+
+    def test_eval_android_best_practices_and_back_navigation_guards(self):
+        """Eval: Guards AndroidManifest.xml and Compose UI screens against regressions in back navigation, state saving, and responsive layout."""
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        manifest_path = os.path.join(root_dir, "android", "app", "src", "main", "AndroidManifest.xml")
+        ui_dir = os.path.join(root_dir, "android", "app", "src", "main", "java", "com", "packtrack", "app", "ui")
+
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = f.read()
+        self.assertIn('android:windowSoftInputMode="adjustResize"', manifest)
+        self.assertIn('android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"', manifest)
+
+        with open(os.path.join(ui_dir, "ChecklistScreen.kt"), "r", encoding="utf-8") as f:
+            checklist_kt = f.read()
+        self.assertIn("rememberSaveable", checklist_kt)
+        self.assertIn("backStack", checklist_kt)
+        self.assertIn("BackHandler(enabled = currentScreen != AppScreen.HOME)", checklist_kt)
+
+        with open(os.path.join(ui_dir, "HomeScreen.kt"), "r", encoding="utf-8") as f:
+            home_kt = f.read()
+        self.assertIn("BackHandler(enabled = drawerState.isOpen)", home_kt)
+        self.assertIn("FlowRow(", home_kt)
+
+        with open(os.path.join(ui_dir, "GeminiInterviewScreen.kt"), "r", encoding="utf-8") as f:
+            interview_kt = f.read()
+        self.assertIn("fun handleStepBack()", interview_kt)
+        self.assertIn("BackHandler(enabled = !isBusy)", interview_kt)
+
+        with open(os.path.join(ui_dir, "TripChecklistScreen.kt"), "r", encoding="utf-8") as f:
+            trip_kt = f.read()
+        self.assertIn("FlowRow(", trip_kt)
+
 
 if __name__ == "__main__":
     unittest.main()
