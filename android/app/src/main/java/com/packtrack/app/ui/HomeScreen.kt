@@ -50,7 +50,7 @@ import kotlinx.coroutines.launch
  *      4. Cloud Sync button
  *  - Home Screen body contains ONLY the clean list of Trip Cards (+ New Trip FAB)
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun HomeScreen(
     dao: PackTrackDao,
@@ -570,6 +570,7 @@ fun HomeScreen(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SavedTripCard(
     trip: TripEntity,
@@ -594,14 +595,15 @@ private fun SavedTripCard(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 14.dp),
+                .padding(horizontal = 16.dp, vertical = 13.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                modifier = Modifier.weight(1f)
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(end = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
                     text = trip.destination,
@@ -609,39 +611,44 @@ private fun SavedTripCard(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.surfaceVariant
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.surfaceVariant
+                    ) {
+                        Text(
+                            text = TripDateUtils.formatRelativeStart(trip.startDate),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(6.dp),
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f))
+                    ) {
+                        Text(
+                            text = "${trip.durationDays}d",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
+                        )
+                    }
                     Text(
-                        text = TripDateUtils.formatRelativeStart(trip.startDate),
+                        text = PackTrackThemeState.formatTempRange(trip.avgLowF, trip.avgHighF),
                         style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                Surface(
-                    shape = RoundedCornerShape(6.dp),
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f))
-                ) {
-                    Text(
-                        text = "${trip.durationDays}d",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
-                    )
-                }
-                Text(
-                    text = PackTrackThemeState.formatTempRange(trip.avgLowF, trip.avgHighF),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
 
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 Text(
                     text = "$packedCount/$totalCount",

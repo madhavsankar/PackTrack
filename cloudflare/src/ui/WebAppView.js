@@ -118,9 +118,9 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
 
         <!-- Progress Bar & Recreate Action -->
         <div class="space-y-1.5">
-          <div class="flex items-center justify-between text-xs gap-2">
+          <div class="flex flex-wrap items-center justify-between text-xs gap-2">
             <span id="progress-label" class="font-medium text-slate-300">Outbound Progress</span>
-            <div class="flex items-center gap-2.5">
+            <div class="flex items-center gap-2 shrink-0">
               <button
                 type="button"
                 onclick="app.openRecreateTripModal()"
@@ -1582,7 +1582,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           ];
           const relLabel = this.formatRelativeStart(iv.startDate);
           bodyEl.innerHTML = \`
-            <div class="grid grid-cols-2 gap-2.5">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               <div class="surface-card rounded-xl p-3.5 space-y-1.5">
                 <label class="text-[10px] font-bold uppercase tracking-wider text-slate-400">Start Date (\${relLabel})</label>
                 <input
@@ -1730,11 +1730,13 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           card.onclick = () => this.openTripDetail(idx);
           card.className = "surface-card rounded-xl px-4 py-3.5 flex items-center justify-between gap-3 cursor-pointer hover:border-slate-500 transition";
           card.innerHTML = \`
-            <div class="flex items-center gap-2 min-w-0 flex-wrap">
+            <div class="min-w-0 flex-1 space-y-1.5">
               <h3 class="text-sm font-semibold text-white truncate">\${trip.destination}</h3>
-              <span class="bg-[#1c2536] border border-[#232f42] text-slate-300 text-[11px] font-medium px-2 py-0.5 rounded-md shrink-0">\${startLabel}</span>
-              <span class="accent-pill border text-[11px] font-semibold px-2 py-0.5 rounded-md shrink-0">\${trip.durationDays}d</span>
-              <span class="text-xs text-slate-400 shrink-0">\${this.formatTempRange(trip.avgLowF, trip.avgHighF)}</span>
+              <div class="flex items-center gap-1.5 flex-wrap">
+                <span class="bg-[#1c2536] border border-[#232f42] text-slate-300 text-[11px] font-medium px-2 py-0.5 rounded-md shrink-0">\${startLabel}</span>
+                <span class="accent-pill border text-[11px] font-semibold px-2 py-0.5 rounded-md shrink-0">\${trip.durationDays}d</span>
+                <span class="text-xs text-slate-400 shrink-0">\${this.formatTempRange(trip.avgLowF, trip.avgHighF)}</span>
+              </div>
             </div>
             <div class="flex items-center gap-2.5 shrink-0">
               <span class="text-xs font-medium text-slate-400">\${packed}/\${total}</span>

@@ -48,7 +48,7 @@ import kotlinx.coroutines.launch
  *  - Long-Press opens a clean Material 3 ModalBottomSheet (Save to Default Template, Edit, Remove)
  *  - Bottom-right FloatingActionButton (+) for manual additions
  */
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
 @Composable
 fun TripChecklistScreen(
     tripId: Long,
@@ -128,7 +128,8 @@ fun TripChecklistScreen(
                                 text = activeTrip.destination,
                                 style = MaterialTheme.typography.titleLarge,
                                 maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
                             )
                             Surface(
                                 shape = RoundedCornerShape(6.dp),
@@ -446,9 +447,9 @@ fun TripChecklistScreen(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    FlowRow(
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                        verticalArrangement = Arrangement.spacedBy(4.dp)
                                     ) {
                                         Text(
                                             text = suggestion.name,
