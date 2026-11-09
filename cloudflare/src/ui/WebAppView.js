@@ -595,6 +595,86 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             this.loadState(false);
           }
         });
+
+        window.history.replaceState({ screen: "home" }, "");
+        window.addEventListener("popstate", () => {
+          if (this.handleBackAction(true)) {
+            window.history.pushState({ screen: this.currentScreen }, "");
+          }
+        });
+        document.addEventListener("keydown", (e) => {
+          if (e.key === "Escape") {
+            this.handleBackAction(false);
+          }
+        });
+      }
+
+      pushHistoryState(label = "") {
+        try {
+          window.history.pushState({ screen: this.currentScreen, label }, "");
+        } catch (_) {}
+      }
+
+      isDrawerOpen() {
+        const drawer = document.getElementById("settings-drawer");
+        return Boolean(drawer && !drawer.classList.contains("-translate-x-full"));
+      }
+
+      closeActiveModals() {
+        let closedAny = false;
+        for (const id of ["add-item-modal", "add-rule-modal"]) {
+          const el = document.getElementById(id);
+          if (el && !el.classList.contains("hidden")) {
+            el.classList.add("hidden");
+            closedAny = true;
+          }
+        }
+        return closedAny;
+      }
+
+      stepBackInterview() {
+        if (!this.iv || this.iv.step === "CREATING") return false;
+        switch (this.iv.step) {
+          case "WORK_PURPOSE":
+            this.iv.step = this.iv.carMode === "own_car" ? "FLIGHT_OR_CAR" : "BAGS";
+            this.render();
+            return true;
+          case "BAGS":
+            this.iv.step = "RENTAL_CAR";
+            this.render();
+            return true;
+          case "RENTAL_CAR":
+            this.iv.step = "FLIGHT_OR_CAR";
+            this.render();
+            return true;
+          case "FLIGHT_OR_CAR":
+            this.iv.step = "EXACT_DATES";
+            this.render();
+            return true;
+          case "EXACT_DATES":
+            this.iv.step = "DESTINATION";
+            this.render();
+            return true;
+          default:
+            this.navigateHome();
+            return true;
+        }
+      }
+
+      handleBackAction(fromPopState = false) {
+        if (this.closeActiveModals()) return true;
+        if (this.isDrawerOpen()) {
+          this.closeDrawer();
+          return true;
+        }
+        if (this.currentScreen === "interview") {
+          return this.stepBackInterview();
+        }
+        if (this.currentScreen !== "home") {
+          this.navigateHome();
+          return true;
+        }
+        return false;
       }
 
       decodeJwtPayload(token) {
@@ -829,6 +909,8 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       handleNavButtonClick() {
         if (this.currentScreen === "home") {
           this.openDrawer();
+        } else if (this.currentScreen === "interview") {
+          this.stepBackInterview();
         } else {
           this.navigateHome();
         }
@@ -849,6 +931,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           this.userEmail || (this.userId === "default" ? "" : (this.state.email || this.userId));
         document.getElementById("drawer-backdrop").classList.remove("hidden");
         document.getElementById("settings-drawer").classList.remove("-translate-x-full");
+        this.pushHistoryState("drawer");
       }
 
       closeDrawer() {
@@ -868,6 +951,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       openTemplateFromDrawer() {
         this.closeDrawer();
         this.currentScreen = "template";
+        this.pushHistoryState("template");
         this.render();
       }
 
@@ -880,6 +964,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       openTripDetail(idx) {
         this.activeTripIdx = idx;
         this.currentScreen = "trip";
+        this.pushHistoryState("trip");
         this.render();
       }
 
@@ -1020,6 +1105,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           isWork: true,
         };
         this.currentScreen = "interview";
+        this.pushHistoryState("interview-destination");
         this.render();
       }
 
@@ -1043,6 +1129,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         if (!clean) return;
         this.iv.destination = clean.charAt(0).toUpperCase() + clean.slice(1);
         this.iv.step = "EXACT_DATES";
+        this.pushHistoryState("interview-dates");
         this.render();
       }
 
@@ -1070,6 +1157,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       confirmInterviewDates() {
         this.iv.days = this.calcDaysBetween(this.iv.startDate, this.iv.endDate);
         this.iv.step = "FLIGHT_OR_CAR";
+        this.pushHistoryState("interview-transport");
         this.render();
       }
 
@@ -1081,18 +1169,21 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         } else {
           this.iv.step = "RENTAL_CAR";
         }
+        this.pushHistoryState("interview-next");
         this.render();
       }
 
       answerInterviewRental(wantsRental) {
         this.iv.carMode = wantsRental ? "rental_car" : "no_car";
         this.iv.step = "BAGS";
+        this.pushHistoryState("interview-bags");
         this.render();
       }
 
       answerInterviewBags(bagTag) {
         this.iv.luggageSpace = bagTag;
         this.iv.step = "WORK_PURPOSE";
+        this.pushHistoryState("interview-work");
         this.render();
       }
 
@@ -1137,6 +1228,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         document.getElementById("ai-new-cat-box")?.classList.add("hidden");
         this.populateCategorySelect("ai-cat", "On Me");
         document.getElementById("add-item-modal").classList.remove("hidden");
+        this.pushHistoryState("add-item-modal");
       }
 
       openAddRuleModal() {
@@ -1149,6 +1241,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         document.getElementById("ar-bag").value = "Personal";
         document.getElementById("ar-scale-select").value = "fixed";
         document.getElementById("add-rule-modal").classList.remove("hidden");
+        this.pushHistoryState("add-rule-modal");
       }
 
       openEditRuleModal(idx) {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.speech.tts.TextToSpeech
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.platform.LocalContext
 import com.packtrack.app.agent.GeminiVoiceAssistant
 import com.packtrack.app.data.FirestoreSyncService
@@ -30,7 +31,7 @@ fun PackTrackMainScreen(
 ) {
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("packtrack_prefs", Context.MODE_PRIVATE) }
-    var currentUserId by remember {
+    var currentUserId by rememberSaveable {
         mutableStateOf(
             FirestoreSyncService.sanitizeUserId(
                 prefs.getString("active_user_id", TravelerTemplateCatalog.DEFAULT_USER_ID)
@@ -42,13 +43,29 @@ fun PackTrackMainScreen(
         voiceAssistant.currentUserId = currentUserId
     }
 
-    var currentScreen by remember { mutableStateOf(AppScreen.HOME) }
-    var activeTripId by remember { mutableStateOf<Long?>(null) }
+    var currentScreen by rememberSaveable { mutableStateOf(AppScreen.HOME) }
+    var activeTripId by rememberSaveable { mutableStateOf<Long?>(null) }
+    val backStack = remember { mutableStateListOf<AppScreen>() }
+
+    fun navigateTo(target: AppScreen) {
+        if (target != currentScreen) {
+            backStack.add(currentScreen)
+            currentScreen = target
+        }
+    }
+
+    fun navigateBack() {
+        currentScreen = if (backStack.isNotEmpty()) {
+            backStack.removeAt(backStack.lastIndex)
+        } else {
+            AppScreen.HOME
+        }
+    }
 
     // If launched via the Home Screen "🎙️ Gemini Voice" widget, jump straight into the Gemini Interview screen
     LaunchedEffect(autoStartVoice) {
         if (autoStartVoice) {
-            currentScreen = AppScreen.GEMINI_INTERVIEW
+            navigateTo(AppScreen.GEMINI_INTERVIEW)
         }
     }
 
@@ -56,14 +73,14 @@ fun PackTrackMainScreen(
     LaunchedEffect(externalOpenTripId) {
         if (externalOpenTripId != null) {
             activeTripId = externalOpenTripId
-            currentScreen = AppScreen.TRIP_CHECKLIST
+            navigateTo(AppScreen.TRIP_CHECKLIST)
             onExternalTripOpened()
         }
     }
 
     // Handle Android system Back button cleanly across sub-screens
     BackHandler(enabled = currentScreen != AppScreen.HOME) {
-        currentScreen = AppScreen.HOME
+        navigateBack()
     }
 
     when (currentScreen) {
@@ -79,13 +96,13 @@ fun PackTrackMainScreen(
                 },
                 onOpenTrip = { tripId ->
                     activeTripId = tripId
-                    currentScreen = AppScreen.TRIP_CHECKLIST
+                    navigateTo(AppScreen.TRIP_CHECKLIST)
                 },
                 onStartNewGeminiTrip = {
-                    currentScreen = AppScreen.GEMINI_INTERVIEW
+                    navigateTo(AppScreen.GEMINI_INTERVIEW)
                 },
                 onOpenTemplateEditor = {
-                    currentScreen = AppScreen.TEMPLATE_EDITOR
+                    navigateTo(AppScreen.TEMPLATE_EDITOR)
                 }
             )
         }
@@ -95,9 +112,11 @@ fun PackTrackMainScreen(
                 tts = tts,
                 autoStartVoice = autoStartVoice,
                 onVoiceStarted = onVoiceStarted,
-                onBackToHome = { currentScreen = AppScreen.HOME },
+                onBackToHome = { navigateBack() },
                 onTripCreated = { newTripId ->
                     activeTripId = newTripId
+                    backStack.clear()
+                    backStack.add(AppScreen.HOME)
                     currentScreen = AppScreen.TRIP_CHECKLIST
                 }
             )
@@ -112,7 +131,7 @@ fun PackTrackMainScreen(
                     currentUserId = currentUserId,
                     dao = dao,
                     voiceAssistant = voiceAssistant,
-                    onBackToHome = { currentScreen = AppScreen.HOME }
+                    onBackToHome = { navigateBack() }
                 )
             }
         }
@@ -120,7 +139,7 @@ fun PackTrackMainScreen(
             TemplateEditorScreen(
                 currentUserId = currentUserId,
                 dao = dao,
-                onBackToHome = { currentScreen = AppScreen.HOME }
+                onBackToHome = { navigateBack() }
             )
         }
     }

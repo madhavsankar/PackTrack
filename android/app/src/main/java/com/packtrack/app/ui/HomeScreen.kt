@@ -2,6 +2,7 @@ package com.packtrack.app.ui
 
 import android.app.Activity
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -77,6 +78,13 @@ fun HomeScreen(
     LaunchedEffect(currentUserId) {
         if (FirestoreSyncService.isUserAllowed(currentUserId)) {
             FirestoreSyncService.pullFromFirestoreIfNeeded(dao, currentUserId)
+        }
+    }
+
+    // Close the Settings & Menu drawer on system Back press instead of exiting the app
+    BackHandler(enabled = drawerState.isOpen) {
+        scope.launch {
+            drawerState.close()
         }
     }
 

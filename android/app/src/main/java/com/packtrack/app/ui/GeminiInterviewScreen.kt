@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.speech.RecognizerIntent
 import android.speech.tts.TextToSpeech
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
@@ -275,6 +276,46 @@ fun GeminiInterviewScreen(
         InterviewStep.WORK_PURPOSE, InterviewStep.CREATING -> 6
     }
 
+    fun handleStepBack() {
+        if (isBusy || step == InterviewStep.CREATING) return
+        when (step) {
+            InterviewStep.DESTINATION -> onBackToHome()
+            InterviewStep.EXACT_DATES -> {
+                step = InterviewStep.DESTINATION
+                promptMessage = "Where are you heading?"
+            }
+            InterviewStep.FLIGHT_OR_CAR -> {
+                step = InterviewStep.EXACT_DATES
+                promptMessage = "What are your exact travel dates for $destination?"
+            }
+            InterviewStep.RENTAL_CAR -> {
+                step = InterviewStep.FLIGHT_OR_CAR
+                promptMessage = "Are you taking a flight or driving your own car?"
+            }
+            InterviewStep.BAGS -> {
+                step = InterviewStep.RENTAL_CAR
+                promptMessage = "Do you plan to take a rental car?"
+            }
+            InterviewStep.WORK_PURPOSE -> {
+                if (carMode == CarTransportMode.OWN_CAR) {
+                    step = InterviewStep.FLIGHT_OR_CAR
+                    promptMessage = "Are you taking a flight or driving your own car?"
+                } else if (forecast?.isInternational == true) {
+                    step = InterviewStep.RENTAL_CAR
+                    promptMessage = "Do you plan to take a rental car?"
+                } else {
+                    step = InterviewStep.BAGS
+                    promptMessage = "How many bags are you bringing?"
+                }
+            }
+            InterviewStep.CREATING -> {}
+        }
+    }
+
+    BackHandler(enabled = !isBusy) {
+        handleStepBack()
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
         topBar = {
@@ -283,7 +324,7 @@ fun GeminiInterviewScreen(
                     containerColor = MaterialTheme.colorScheme.background
                 ),
                 navigationIcon = {
-                    IconButton(onClick = onBackToHome) {
+                    IconButton(onClick = { handleStepBack() }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
