@@ -32,11 +32,21 @@ fun PackTrackMainScreen(
     val context = LocalContext.current
     val prefs = remember { context.getSharedPreferences("packtrack_prefs", Context.MODE_PRIVATE) }
     var currentUserId by rememberSaveable {
-        mutableStateOf(
-            FirestoreSyncService.sanitizeUserId(
-                prefs.getString("active_user_id", TravelerTemplateCatalog.DEFAULT_USER_ID)
-            )
-        )
+        val savedPref = prefs.getString("active_user_id", null)
+        val initialRaw = if (!savedPref.isNullOrBlank() && savedPref != TravelerTemplateCatalog.DEFAULT_USER_ID) {
+            savedPref
+        } else {
+            val lastGoogleEmail = com.google.android.gms.auth.api.signin.GoogleSignIn
+                .getLastSignedInAccount(context)?.email?.trim()?.lowercase()
+            if (!lastGoogleEmail.isNullOrBlank() && FirestoreSyncService.isUserAllowed(lastGoogleEmail)) {
+                val sanitized = FirestoreSyncService.sanitizeUserId(lastGoogleEmail)
+                prefs.edit().putString("active_user_id", sanitized).apply()
+                sanitized
+            } else {
+                savedPref ?: TravelerTemplateCatalog.DEFAULT_USER_ID
+            }
+        }
+        mutableStateOf(FirestoreSyncService.sanitizeUserId(initialRaw))
     }
 
     LaunchedEffect(currentUserId) {

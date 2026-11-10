@@ -475,6 +475,7 @@ class ChecklistCalculatorEvalTest {
         val tripChecklistText = java.io.File(uiDir, "TripChecklistScreen.kt").readText()
         assertTrue("TripChecklistScreen must use FlowRow for responsive header badges", tripChecklistText.contains("FlowRow("))
         assertTrue("TripChecklistScreen top bar must display formatted date range alongside duration days", tripChecklistText.contains("formatDateRange("))
+        assertTrue("ChecklistScreen must persist active_user_id and restore GoogleSignIn across app restarts", checklistScreenText.contains("active_user_id") && checklistScreenText.contains("getLastSignedInAccount"))
     }
 }
 
