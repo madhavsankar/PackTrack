@@ -403,6 +403,11 @@ class ChecklistCalculatorEvalTest {
         val keyYesterday = TripDateUtils.sortKeyClosestToFarthest("2026-11-07", today)
         assertTrue(keyToday < keyIn3Days)
         assertTrue(keyIn3Days < keyYesterday)
+
+        // 3. Date range formatting (same month, cross-month, cross-year)
+        assertEquals("Nov 10–14", TripDateUtils.formatDateRange("2026-11-10", 4))
+        assertEquals("Nov 28 – Dec 3", TripDateUtils.formatDateRange("2026-11-28", 5))
+        assertEquals("Dec 29, 2026 – Jan 3, 2027", TripDateUtils.formatDateRange("2026-12-29", 5, "2027-01-03"))
     }
 
     @Test
@@ -429,13 +434,16 @@ class ChecklistCalculatorEvalTest {
         val homeScreenText = java.io.File(uiDir, "HomeScreen.kt").readText()
         assertTrue("HomeScreen must close open navigation drawer on Back press", homeScreenText.contains("BackHandler(enabled = drawerState.isOpen)"))
         assertTrue("HomeScreen must use FlowRow so badges wrap on narrow screens", homeScreenText.contains("FlowRow("))
+        assertTrue("HomeScreen must display formatted date range alongside duration days", homeScreenText.contains("formatDateRange("))
 
         val interviewScreenText = java.io.File(uiDir, "GeminiInterviewScreen.kt").readText()
         assertTrue("GeminiInterviewScreen must step back through interview stages on Back press", interviewScreenText.contains("fun handleStepBack()"))
         assertTrue("GeminiInterviewScreen must register BackHandler calling handleStepBack", interviewScreenText.contains("BackHandler(enabled = !isBusy)"))
+        assertTrue("GeminiInterviewScreen top bar must display formatted date range alongside duration days", interviewScreenText.contains("formatDateRange("))
 
         val tripChecklistText = java.io.File(uiDir, "TripChecklistScreen.kt").readText()
         assertTrue("TripChecklistScreen must use FlowRow for responsive header badges", tripChecklistText.contains("FlowRow("))
+        assertTrue("TripChecklistScreen top bar must display formatted date range alongside duration days", tripChecklistText.contains("formatDateRange("))
     }
 }
 

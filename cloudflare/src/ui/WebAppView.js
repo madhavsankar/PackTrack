@@ -893,6 +893,37 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         return diff >= 0 ? diff : 1000000 + Math.abs(diff);
       }
 
+      formatDateRange(rawStartDate, durationDays, rawEndDate) {
+        const sClean = String(rawStartDate || "").trim().slice(0, 10);
+        let sDate;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(sClean)) {
+          const [y, m, d] = sClean.split("-").map(Number);
+          sDate = new Date(Date.UTC(y, m - 1, d));
+        } else {
+          const now = new Date();
+          sDate = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+        }
+        const days = Math.max(1, Number(durationDays) || 1);
+        const eClean = String(rawEndDate || "").trim().slice(0, 10);
+        let eDate;
+        if (/^\d{4}-\d{2}-\d{2}$/.test(eClean)) {
+          const [y, m, d] = eClean.split("-").map(Number);
+          eDate = new Date(Date.UTC(y, m - 1, d));
+        } else {
+          eDate = new Date(sDate.getTime() + days * 86400000);
+        }
+        const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const sm = months[sDate.getUTCMonth()];
+        const sd = sDate.getUTCDate();
+        const sy = sDate.getUTCFullYear();
+        const em = months[eDate.getUTCMonth()];
+        const ed = eDate.getUTCDate();
+        const ey = eDate.getUTCFullYear();
+        if (sy !== ey) return \`\${sm} \${sd}, \${sy} – \${em} \${ed}, \${ey}\`;
+        if (sm === em) return \`\${sm} \${sd}–\${ed}\`;
+        return \`\${sm} \${sd} – \${em} \${ed}\`;
+      }
+
       setAccentHue(hueVal) {
         const h = Math.max(0, Math.min(360, Number(hueVal) || 160));
         this.accentHue = h;
@@ -1567,10 +1598,13 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           this.renderHomeTripsList();
         } else if (this.currentScreen === "interview") {
           navSymbol.textContent = "←";
+          const ivRange = this.formatDateRange(this.iv?.startDate, this.iv?.days, this.iv?.endDate);
           headerTitle.textContent = this.iv?.destination
-            ? \`\${this.iv.destination} (\${this.iv.days}d)\`
+            ? \`\${this.iv.destination} (\${ivRange} · \${this.iv.days}d)\`
             : "New Trip";
-          headerSubtitle.textContent = "Interactive Gemini Trip Setup";
+          headerSubtitle.textContent = this.iv?.destination
+            ? \`\${ivRange} · \${this.iv.days} days · Interactive Gemini Trip Setup\`
+            : "Interactive Gemini Trip Setup";
           this.renderInterviewScreen();
         } else if (this.currentScreen === "trip") {
           const trip = this.state.trips[this.activeTripIdx];
@@ -1578,9 +1612,10 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             this.navigateHome();
             return;
           }
+          const dateRange = this.formatDateRange(trip.startDate, trip.durationDays, trip.endDate);
           navSymbol.textContent = "←";
           headerTitle.textContent = \`\${trip.destination}, \${trip.country || ""}\`;
-          headerSubtitle.textContent = \`\${trip.durationDays}d · \${this.formatTempRange(trip.avgLowF, trip.avgHighF)} · Plug \${trip.plugTypes || "Type A/B"}\`;
+          headerSubtitle.textContent = \`\${dateRange} (\${trip.durationDays}d) · \${this.formatTempRange(trip.avgLowF, trip.avgHighF)} · Plug \${trip.plugTypes || "Type A/B"}\`;
           fabLabel.textContent = "Add Item";
           this.renderTripDetail(trip);
         } else if (this.currentScreen === "template") {
@@ -1818,6 +1853,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           const packed = items.filter((i) => Boolean(i.packedOutbound)).length;
           const total = items.length;
           const startLabel = this.formatRelativeStart(trip.startDate);
+          const dateRange = this.formatDateRange(trip.startDate, trip.durationDays, trip.endDate);
 
           const card = document.createElement("div");
           card.onclick = () => this.openTripDetail(idx);
@@ -1827,7 +1863,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
               <h3 class="text-sm font-semibold text-white truncate">\${trip.destination}</h3>
               <div class="flex items-center gap-1.5 flex-wrap">
                 <span class="bg-[#1c2536] border border-[#232f42] text-slate-300 text-[11px] font-medium px-2 py-0.5 rounded-md shrink-0">\${startLabel}</span>
-                <span class="accent-pill border text-[11px] font-semibold px-2 py-0.5 rounded-md shrink-0">\${trip.durationDays}d</span>
+                <span class="accent-pill border text-[11px] font-semibold px-2 py-0.5 rounded-md shrink-0">\${dateRange} · \${trip.durationDays}d</span>
                 <span class="text-xs text-slate-400 shrink-0">\${this.formatTempRange(trip.avgLowF, trip.avgHighF)}</span>
               </div>
             </div>

@@ -119,6 +119,10 @@ fun TripChecklistScreen(
                     }
                 },
                 title = {
+                    val dateRangeStr = com.packtrack.app.domain.TripDateUtils.formatDateRange(
+                        activeTrip.startDate,
+                        activeTrip.durationDays
+                    )
                     Column {
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -136,9 +140,10 @@ fun TripChecklistScreen(
                                 color = MaterialTheme.colorScheme.surfaceVariant
                             ) {
                                 Text(
-                                    text = "${activeTrip.durationDays}d",
+                                    text = "$dateRangeStr · ${activeTrip.durationDays}d",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
                                     modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
                                 )
                             }
@@ -146,7 +151,7 @@ fun TripChecklistScreen(
                         val plugSuffix = if (activeTrip.plugTypes.startsWith("Type A/B")) "" else "  •  ${activeTrip.plugTypes}"
                         val tempRange = com.packtrack.app.ui.theme.PackTrackThemeState.formatTempRange(activeTrip.avgLowF, activeTrip.avgHighF)
                         Text(
-                            text = "$tempRange  •  ${activeTrip.rainyDaysCount} rainy d$plugSuffix",
+                            text = "$dateRangeStr (${activeTrip.durationDays}d)  •  $tempRange  •  ${activeTrip.rainyDaysCount} rainy d$plugSuffix",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,

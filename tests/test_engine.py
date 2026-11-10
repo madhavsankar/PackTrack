@@ -539,8 +539,9 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn("closeActiveModals()", webapp_src)
         self.assertIn("isDrawerOpen()", webapp_src)
         self.assertIn("pushHistoryState(", webapp_src)
+        self.assertIn("formatDateRange(", webapp_src)
 
-        # 3. Verify stepBackInterview state transitions in JS runtime
+        # 3. Verify stepBackInterview state transitions and formatDateRange in JS runtime
         import json
         import shutil
         import subprocess
@@ -549,6 +550,10 @@ class TestPackTrackEngine(unittest.TestCase):
         end_idx = webapp_src.index("handleBackAction(fromPopState = false)")
         step_back_method = webapp_src[start_idx:end_idx]
 
+        fmt_start = webapp_src.index("formatDateRange(rawStartDate, durationDays, rawEndDate) {")
+        fmt_end = webapp_src.index("setAccentHue(hueVal) {")
+        fmt_method = webapp_src[fmt_start:fmt_end].replace("\\`", "`").replace("\\$", "$")
+
         js_harness = f"""
         const app = {{
           currentScreen: 'interview',
@@ -556,7 +561,8 @@ class TestPackTrackEngine(unittest.TestCase):
           renderCalls: 0,
           render() {{ this.renderCalls++; }},
           navigateHome() {{ this.currentScreen = 'home'; }},
-          {step_back_method}
+          {step_back_method},
+          {fmt_method}
         }};
         const stepsVisited = [app.iv.step];
         while (app.currentScreen === 'interview') {{
@@ -574,7 +580,11 @@ class TestPackTrackEngine(unittest.TestCase):
         ownCarApp.stepBackInterview();
         const ownCarPrevStep = ownCarApp.iv.step;
 
-        const out = JSON.stringify({{ stepsVisited, ownCarPrevStep }});
+        const sameMonthRange = app.formatDateRange('2026-11-10', 4);
+        const crossMonthRange = app.formatDateRange('2026-11-28', 5);
+        const crossYearRange = app.formatDateRange('2026-12-29', 5, '2027-01-03');
+
+        const out = JSON.stringify({{ stepsVisited, ownCarPrevStep, sameMonthRange, crossMonthRange, crossYearRange }});
         if (typeof console !== 'undefined' && console.log) console.log(out);
         else if (typeof print !== 'undefined') print(out);
         """
@@ -589,6 +599,9 @@ class TestPackTrackEngine(unittest.TestCase):
             ["WORK_PURPOSE", "BAGS", "RENTAL_CAR", "FLIGHT_OR_CAR", "EXACT_DATES", "DESTINATION", "HOME"],
         )
         self.assertEqual(res["ownCarPrevStep"], "FLIGHT_OR_CAR")
+        self.assertEqual(res["sameMonthRange"], "Nov 10–14")
+        self.assertEqual(res["crossMonthRange"], "Nov 28 – Dec 3")
+        self.assertEqual(res["crossYearRange"], "Dec 29, 2026 – Jan 3, 2027")
 
     def test_eval_android_best_practices_and_back_navigation_guards(self):
         """Eval: Guards AndroidManifest.xml and Compose UI screens against regressions in back navigation, state saving, and responsive layout."""
@@ -611,15 +624,18 @@ class TestPackTrackEngine(unittest.TestCase):
             home_kt = f.read()
         self.assertIn("BackHandler(enabled = drawerState.isOpen)", home_kt)
         self.assertIn("FlowRow(", home_kt)
+        self.assertIn("formatDateRange(", home_kt)
 
         with open(os.path.join(ui_dir, "GeminiInterviewScreen.kt"), "r", encoding="utf-8") as f:
             interview_kt = f.read()
         self.assertIn("fun handleStepBack()", interview_kt)
         self.assertIn("BackHandler(enabled = !isBusy)", interview_kt)
+        self.assertIn("formatDateRange(", interview_kt)
 
         with open(os.path.join(ui_dir, "TripChecklistScreen.kt"), "r", encoding="utf-8") as f:
             trip_kt = f.read()
         self.assertIn("FlowRow(", trip_kt)
+        self.assertIn("formatDateRange(", trip_kt)
 
 
 if __name__ == "__main__":

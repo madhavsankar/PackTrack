@@ -23,6 +23,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.packtrack.app.agent.GeminiVoiceAssistant
 import com.packtrack.app.domain.CarTransportMode
@@ -332,14 +333,47 @@ fun GeminiInterviewScreen(
                     }
                 },
                 title = {
-                    Text(
-                        text = if (destination.isNotEmpty() && step != InterviewStep.DESTINATION) {
-                            "$destination ($days days)"
-                        } else {
-                            "New Trip"
-                        },
-                        style = MaterialTheme.typography.titleLarge
-                    )
+                    if (destination.isNotEmpty() && step != InterviewStep.DESTINATION) {
+                        val dateRangeStr = TripDateUtils.formatDateRange(startDate, days, endDate)
+                        Column {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                Text(
+                                    text = destination,
+                                    style = MaterialTheme.typography.titleLarge,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false)
+                                )
+                                Surface(
+                                    shape = RoundedCornerShape(6.dp),
+                                    color = MaterialTheme.colorScheme.surfaceVariant
+                                ) {
+                                    Text(
+                                        text = "$dateRangeStr · ${days}d",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                    )
+                                }
+                            }
+                            Text(
+                                text = "$dateRangeStr  •  $days days",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
+                    } else {
+                        Text(
+                            text = "New Trip",
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                    }
                 }
             )
         },

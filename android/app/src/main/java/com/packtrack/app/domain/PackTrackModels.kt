@@ -187,6 +187,23 @@ object TripDateUtils {
         }
     }
 
+    fun formatDateRange(
+        rawStartDate: String?,
+        durationDays: Int,
+        rawEndDate: String? = null
+    ): String {
+        val start = parseStartDate(rawStartDate) ?: java.time.LocalDate.now()
+        val end = parseStartDate(rawEndDate) ?: start.plusDays(maxOf(1, durationDays).toLong())
+        val fmtMonthDay = java.time.format.DateTimeFormatter.ofPattern("MMM d", java.util.Locale.US)
+        val fmtDay = java.time.format.DateTimeFormatter.ofPattern("d", java.util.Locale.US)
+        val fmtFull = java.time.format.DateTimeFormatter.ofPattern("MMM d, yyyy", java.util.Locale.US)
+        return when {
+            start.year != end.year -> "${start.format(fmtFull)} – ${end.format(fmtFull)}"
+            start.month == end.month -> "${start.format(fmtMonthDay)}–${end.format(fmtDay)}"
+            else -> "${start.format(fmtMonthDay)} – ${end.format(fmtMonthDay)}"
+        }
+    }
+
     fun daysUntilStart(
         rawStartDate: String?,
         today: java.time.LocalDate = java.time.LocalDate.now()

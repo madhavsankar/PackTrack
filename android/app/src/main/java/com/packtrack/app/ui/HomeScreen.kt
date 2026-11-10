@@ -639,8 +639,9 @@ private fun SavedTripCard(
                         color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
                         border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.38f))
                     ) {
+                        val dateRangeStr = TripDateUtils.formatDateRange(trip.startDate, trip.durationDays)
                         Text(
-                            text = "${trip.durationDays}d",
+                            text = "$dateRangeStr · ${trip.durationDays}d",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.primary,
                             modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp)
