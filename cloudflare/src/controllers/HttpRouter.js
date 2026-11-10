@@ -14,8 +14,21 @@ const CORS_HEADERS = {
 };
 
 const VERIFIED_GOOGLE_TOKENS = new Map();
-const SESSION_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000; // 90 days
+const SESSION_MAX_AGE_MS = 3650 * 24 * 60 * 60 * 1000; // 10 years (3,650 days — until explicit Sign Out)
 let GOOGLE_JWKS_CACHE = { keys: null, fetchedAt: 0 };
+
+function encodeBase64UrlBytes(bytes) {
+  let bin = "";
+  const arr = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  for (let i = 0; i < arr.length; i++) {
+    bin += String.fromCharCode(arr[i]);
+  }
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+function encodeBase64UrlJson(obj) {
+  return encodeBase64UrlBytes(new TextEncoder().encode(JSON.stringify(obj)));
+}
 
 function decodeBase64UrlBytes(b64url) {
   const b64 = String(b64url || "")
@@ -33,6 +46,70 @@ function decodeBase64UrlBytes(b64url) {
 function decodeBase64UrlJson(b64url) {
   const bytes = decodeBase64UrlBytes(b64url);
   return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+async function getHmacCryptoKey(secret, usage) {
+  const keyBytes = new TextEncoder().encode(String(secret || "packtrack-session-v1"));
+  return crypto.subtle.importKey(
+    "raw",
+    keyBytes,
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    usage
+  );
+}
+
+export async function mintWorkerSessionToken(email, secret) {
+  const cleanEmail = String(email || "").trim().toLowerCase();
+  const nowSec = Math.floor(Date.now() / 1000);
+  const expSec = nowSec + 3650 * 24 * 60 * 60; // 10 years
+  const headerB64 = encodeBase64UrlJson({ alg: "HS256", typ: "JWT" });
+  const payloadB64 = encodeBase64UrlJson({
+    iss: "worker-session",
+    email: cleanEmail,
+    email_verified: true,
+    iat: nowSec,
+    exp: expSec,
+  });
+  const signingInput = `${headerB64}.${payloadB64}`;
+  const key = await getHmacCryptoKey(secret, ["sign"]);
+  const sigBuf = await crypto.subtle.sign(
+    "HMAC",
+    key,
+    new TextEncoder().encode(signingInput)
+  );
+  return `${signingInput}.${encodeBase64UrlBytes(sigBuf)}`;
+}
+
+export async function verifyWorkerSessionToken(token, secret) {
+  const parts = String(token || "").split(".");
+  if (parts.length !== 3) return null;
+  let header;
+  let payload;
+  try {
+    header = decodeBase64UrlJson(parts[0]);
+    payload = decodeBase64UrlJson(parts[1]);
+  } catch (_) {
+    return null;
+  }
+  if (!header || header.alg !== "HS256" || !payload || payload.iss !== "worker-session") {
+    return null;
+  }
+  if (!payload.email) return null;
+  const iatSec = Number(payload.iat || 0);
+  const expMs = iatSec > 0 ? iatSec * 1000 + SESSION_MAX_AGE_MS : Number(payload.exp || 0) * 1000;
+  if (expMs > 0 && expMs <= Date.now()) {
+    return { error: "Session expired. Please sign in again." };
+  }
+  const key = await getHmacCryptoKey(secret, ["verify"]);
+  const signedData = new TextEncoder().encode(`${parts[0]}.${parts[1]}`);
+  const sigBytes = decodeBase64UrlBytes(parts[2]);
+  const valid = await crypto.subtle.verify("HMAC", key, sigBytes, signedData);
+  if (!valid) return null;
+  return {
+    email: String(payload.email).trim().toLowerCase(),
+    expMs: expMs || Date.now() + SESSION_MAX_AGE_MS,
+  };
 }
 
 async function verifyGoogleJwtWithJwks(token, expectedAud) {
@@ -101,6 +178,16 @@ export class HttpRouter {
     return String(this.env?.GOOGLE_CLIENT_ID || "").trim();
   }
 
+  _getSessionSecret() {
+    return (
+      String(this.env?.SESSION_SECRET || "").trim() ||
+      String(this.env?.FIREBASE_API_KEY || "").trim() ||
+      String(this.env?.GEMINI_API_KEY || "").trim() ||
+      String(this.env?.GOOGLE_CLIENT_ID || "").trim() ||
+      "packtrack-session-v1"
+    );
+  }
+
   _isEmailAllowed(email) {
     const cleanEmail = String(email || "").trim().toLowerCase();
     if (!cleanEmail) return false;
@@ -146,25 +233,47 @@ export class HttpRouter {
     }
 
     let verifiedEmail = "";
+    let isWorkerSession = false;
+    const sessionSecret = this._getSessionSecret();
     const cached = VERIFIED_GOOGLE_TOKENS.get(token);
     if (cached && cached.expMs > Date.now()) {
       verifiedEmail = cached.email;
+      isWorkerSession = Boolean(cached.isWorkerSession);
     } else {
-      const expectedAud = this._getGoogleClientId();
       try {
-        // 1. Cryptographically verify Google RS256 JWT against Google JWKS with 90-day session lifetime
-        const jwksResult = await verifyGoogleJwtWithJwks(token, expectedAud);
-        if (jwksResult && jwksResult.error) {
-          return { ok: false, status: 401, error: jwksResult.error };
+        // 0. Check 10-year Worker-signed HMAC-SHA256 session token first (unaffected by Google JWKS rotation)
+        const workerRes = await verifyWorkerSessionToken(token, sessionSecret);
+        if (workerRes && workerRes.error) {
+          return { ok: false, status: 401, error: workerRes.error };
         }
-        if (jwksResult && jwksResult.email) {
-          verifiedEmail = jwksResult.email;
+        if (workerRes && workerRes.email) {
+          verifiedEmail = workerRes.email;
+          isWorkerSession = true;
           VERIFIED_GOOGLE_TOKENS.set(token, {
             email: verifiedEmail,
-            expMs: jwksResult.expMs,
+            expMs: workerRes.expMs,
+            isWorkerSession: true,
           });
         }
       } catch (_) {}
+
+      const expectedAud = this._getGoogleClientId();
+      if (!verifiedEmail) {
+        try {
+          // 1. Cryptographically verify Google RS256 JWT against Google JWKS
+          const jwksResult = await verifyGoogleJwtWithJwks(token, expectedAud);
+          if (jwksResult && jwksResult.error) {
+            return { ok: false, status: 401, error: jwksResult.error };
+          }
+          if (jwksResult && jwksResult.email) {
+            verifiedEmail = jwksResult.email;
+            VERIFIED_GOOGLE_TOKENS.set(token, {
+              email: verifiedEmail,
+              expMs: jwksResult.expMs,
+            });
+          }
+        } catch (_) {}
+      }
 
       // 2. Fallback to oauth2.googleapis.com/tokeninfo if JWKS key rolled or wasn't matched
       if (!verifiedEmail) {
@@ -216,7 +325,15 @@ export class HttpRouter {
       };
     }
 
-    return { ok: true, email: verifiedEmail };
+    try {
+      this.activeSessionToken = isWorkerSession
+        ? token
+        : await mintWorkerSessionToken(verifiedEmail, sessionSecret);
+    } catch (_) {
+      this.activeSessionToken = token;
+    }
+
+    return { ok: true, email: verifiedEmail, sessionToken: this.activeSessionToken };
   }
 
   json(data, status = 200) {
@@ -284,7 +401,10 @@ export class HttpRouter {
 
       if (path === "/api/state") {
         const state = await this.repo.getUserState(userParam);
-        return this.json(state);
+        return this.json({
+          ...state,
+          session_token: this.activeSessionToken || "",
+        });
       }
     }
 

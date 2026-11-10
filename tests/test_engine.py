@@ -691,11 +691,13 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn("FlowRow(", trip_kt)
         self.assertIn("formatDateRange(", trip_kt)
 
-        # Verify 90-day Google login session persistence in HttpRouter.js, WebAppView.js, and ChecklistScreen.kt
+        # Verify 10-year (until explicit Sign Out) login session persistence in HttpRouter.js, WebAppView.js, and ChecklistScreen.kt
         router_path = os.path.join(root_dir, "cloudflare", "src", "controllers", "HttpRouter.js")
         with open(router_path, "r", encoding="utf-8") as f:
             router_js = f.read()
-        self.assertIn("SESSION_MAX_AGE_MS = 90 * 24 * 60 * 60 * 1000", router_js)
+        self.assertIn("SESSION_MAX_AGE_MS = 3650 * 24 * 60 * 60 * 1000", router_js)
+        self.assertIn("mintWorkerSessionToken", router_js)
+        self.assertIn("verifyWorkerSessionToken", router_js)
         self.assertIn("verifyGoogleJwtWithJwks", router_js)
         self.assertIn("active_user_id", checklist_kt)
         self.assertIn("GoogleSignIn", checklist_kt)

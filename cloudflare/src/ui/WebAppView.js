@@ -688,14 +688,15 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         }
       }
 
-      isGoogleTokenValid() {
-        if (!this.googleIdToken) return false;
-        const payload = this.decodeJwtPayload(this.googleIdToken);
+      isGoogleTokenValid(tokenOverride) {
+        const tok = tokenOverride || this.googleIdToken;
+        if (!tok) return false;
+        const payload = this.decodeJwtPayload(tok);
         if (!payload || !payload.email) return false;
         const issuedAtSec = Number(payload.iat || payload.exp || 0);
-        const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000;
+        const tenYearsMs = 3650 * 24 * 60 * 60 * 1000;
         if (issuedAtSec > 0) {
-          return issuedAtSec * 1000 + ninetyDaysMs > Date.now();
+          return issuedAtSec * 1000 + tenYearsMs > Date.now();
         }
         return true;
       }
@@ -1038,6 +1039,10 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           }
           if (resp.ok) {
             this.state = await resp.json();
+            if (this.state && this.state.session_token && this.state.session_token !== this.googleIdToken) {
+              this.googleIdToken = this.state.session_token;
+              localStorage.setItem("packtrack_google_id_token", this.googleIdToken);
+            }
           }
         } catch (_) {}
         if (manual) {
