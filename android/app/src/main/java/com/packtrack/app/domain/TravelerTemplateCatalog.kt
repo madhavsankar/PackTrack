@@ -147,4 +147,33 @@ object TravelerTemplateCatalog {
             else -> "Universal Adapter ($countryCode)"
         }
     }
+
+    fun isUsaOrIndia(
+        country: String?,
+        countryCode: String? = null,
+        plugTypes: String? = null
+    ): Boolean {
+        val code = (countryCode ?: "").trim().uppercase()
+        if (code in setOf("US", "USA", "IN", "IND")) return true
+        val c = (country ?: "").trim().lowercase()
+        if (c in setOf("united states", "united states of america", "usa", "us", "u.s.", "u.s.a.", "india", "in", "bharat")) {
+            return true
+        }
+        if (c.isEmpty() && code.isEmpty()) {
+            val p = (plugTypes ?: "").trim()
+            if (p == "Type A/B" || p.startsWith("Type A/B (120V)") || p.startsWith("Type C/D/M")) {
+                return true
+            }
+        }
+        return false
+    }
+
+    fun isPlugInfoNeeded(
+        country: String?,
+        countryCode: String? = null,
+        plugTypes: String? = null
+    ): Boolean {
+        if (isUsaOrIndia(country, countryCode, plugTypes)) return false
+        return !(plugTypes ?: "").trim().isEmpty()
+    }
 }

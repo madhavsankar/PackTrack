@@ -691,8 +691,13 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       isGoogleTokenValid() {
         if (!this.googleIdToken) return false;
         const payload = this.decodeJwtPayload(this.googleIdToken);
-        if (!payload || !payload.email || !payload.exp) return false;
-        return payload.exp * 1000 > Date.now() + 30000;
+        if (!payload || !payload.email) return false;
+        const issuedAtSec = Number(payload.iat || payload.exp || 0);
+        const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000;
+        if (issuedAtSec > 0) {
+          return issuedAtSec * 1000 + ninetyDaysMs > Date.now();
+        }
+        return true;
       }
 
       getHeaders(extra = {}) {
@@ -922,6 +927,20 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         if (sy !== ey) return \`\${sm} \${sd}, \${sy} – \${em} \${ed}, \${ey}\`;
         if (sm === em) return \`\${sm} \${sd}–\${ed}\`;
         return \`\${sm} \${sd} – \${em} \${ed}\`;
+      }
+
+      isPlugInfoNeeded(country, countryCode, plugTypes) {
+        const code = String(countryCode || "").trim().toUpperCase();
+        if (["US", "USA", "IN", "IND"].includes(code)) return false;
+        const c = String(country || "").trim().toLowerCase();
+        if (["united states", "united states of america", "usa", "us", "u.s.", "u.s.a.", "india", "in", "bharat"].includes(c)) {
+          return false;
+        }
+        const p = String(plugTypes || "").trim();
+        if (!c && !code && (!p || p === "Type A/B" || p.startsWith("Type A/B (120V)") || p.startsWith("Type C/D/M"))) {
+          return false;
+        }
+        return Boolean(p);
       }
 
       setAccentHue(hueVal) {
@@ -1613,9 +1632,12 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             return;
           }
           const dateRange = this.formatDateRange(trip.startDate, trip.durationDays, trip.endDate);
+          const plugPart = this.isPlugInfoNeeded(trip.country, trip.countryCode, trip.plugTypes)
+            ? \` · Plug \${trip.plugTypes}\`
+            : "";
           navSymbol.textContent = "←";
           headerTitle.textContent = \`\${trip.destination}, \${trip.country || ""}\`;
-          headerSubtitle.textContent = \`\${dateRange} (\${trip.durationDays}d) · \${this.formatTempRange(trip.avgLowF, trip.avgHighF)} · Plug \${trip.plugTypes || "Type A/B"}\`;
+          headerSubtitle.textContent = \`\${dateRange} (\${trip.durationDays}d) · \${this.formatTempRange(trip.avgLowF, trip.avgHighF)}\${plugPart}\`;
           fabLabel.textContent = "Add Item";
           this.renderTripDetail(trip);
         } else if (this.currentScreen === "template") {

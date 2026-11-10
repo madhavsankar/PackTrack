@@ -48,19 +48,100 @@ class GeminiVoiceAssistant(
             "gemini-flash-latest",
             "gemini-3.8-flash",
             "gemini-3.6-flash",
+            "gemini-3-flash-preview",
             "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
-            "gemini-flash-lite-latest"
+            "gemini-3.1-flash-lite-preview",
+            "gemini-flash-lite-latest",
+            "gemini-3.1-pro-preview",
+            "gemini-pro-latest"
+        )
+
+        val EMERGENCY_LAST_RESORT_MODELS: List<String> = listOf(
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite"
         )
 
         @Volatile
-        private var cachedCascade: List<String>? = null
+        private var cachedDiscoveredModels: List<String>? = null
 
         @Volatile
         private var cachedCascadeAtMs: Long = 0L
 
         @Volatile
         private var lastWorkingModel: String? = null
+
+        fun extractCleanJson(rawText: String): String? {
+            val cleaned = rawText
+                .replace(Regex("^```(?:json)?\\s*", RegexOption.IGNORE_CASE), "")
+                .replace(Regex("\\s*```$"), "")
+                .trim()
+            if (cleaned.isEmpty()) return null
+            fun hasBalancedJsonStructure(s: String): Boolean {
+                val t = s.trim()
+                if (t.length < 2) return false
+                val first = t.first()
+                val last = t.last()
+                if (!((first == '{' && last == '}') || (first == '[' && last == ']'))) return false
+                var depth = 0
+                var inString = false
+                var escaped = false
+                for (ch in t) {
+                    if (escaped) {
+                        escaped = false
+                        continue
+                    }
+                    if (ch == '\\' && inString) {
+                        escaped = true
+                        continue
+                    }
+                    if (ch == '"') {
+                        inString = !inString
+                        continue
+                    }
+                    if (!inString) {
+                        when (ch) {
+                            '{', '[' -> depth++
+                            '}', ']' -> {
+                                depth--
+                                if (depth < 0) return false
+                            }
+                        }
+                    }
+                }
+                return !inString && depth == 0
+            }
+            fun isValidJson(candidate: String): Boolean {
+                if (!hasBalancedJsonStructure(candidate)) return false
+                return try {
+                    if (candidate.startsWith("{")) {
+                        JSONObject(candidate)
+                        true
+                    } else if (candidate.startsWith("[")) {
+                        JSONArray(candidate)
+                        true
+                    } else {
+                        false
+                    }
+                } catch (_: Exception) {
+                    false
+                }
+            }
+            if (isValidJson(cleaned)) return cleaned
+            val objStart = cleaned.indexOf('{')
+            val objEnd = cleaned.lastIndexOf('}')
+            if (objStart != -1 && objEnd > objStart) {
+                val sub = cleaned.substring(objStart, objEnd + 1)
+                if (isValidJson(sub)) return sub
+            }
+            val arrStart = cleaned.indexOf('[')
+            val arrEnd = cleaned.lastIndexOf(']')
+            if (arrStart != -1 && arrEnd > arrStart) {
+                val sub = cleaned.substring(arrStart, arrEnd + 1)
+                if (isValidJson(sub)) return sub
+            }
+            return null
+        }
 
         /**
          * Multi-stage model classifier and scorer for `/v1beta/models` entries:
@@ -447,14 +528,14 @@ class GeminiVoiceAssistant(
                     TASK 1 (`templateItems` — Evaluate User's Default Template Rules):
                     Evaluate EVERY item in the user's Default Template below against the TRIP DETAILS and DAY-BY-DAY WEATHER FORECAST.
                     - Include an item in `templateItems` IF AND ONLY IF its `Condition` is satisfied for this trip (for example: "Always" is always included; "Only when working" or "if work is expected to be done" is included only when Purpose is Work; complex natural-language conditions like "Only add this when there is at least one rainy day and if trip is for more than 5 days and only when we go to India" are included only when ALL parts of that condition hold true for this trip).
-                    - If `scale_by_days=true`, compute `quantity = ceil(effectiveDays * ratio)`. Otherwise `quantity = 1`.
+                    - If `scale_by_days=true`, compute `quantity = ceil(effectiveDays * ratio)`. Otherwise `quantity = 1`. Keep `reason` concise (max 8 words) for templateItems.
 
                     TASK 2 (`suggestedItems` — Dynamic Weather & Trip Suggestions):
-                    Suggest 2 to 5 additional practical items or preparations tailored to the day-by-day forecast, destination, and vehicle mode that are NOT already in `templateItems` (e.g. raincoat/umbrella citing rainy days, snow tires/ice scraper if freezing/snowing while driving, sun hat/sunscreen on high-UV/hot days, windbreaker on windy days, or ${forecast.plugTypes} power adapter if international).
+                    Suggest 2 to 5 additional practical items or preparations tailored to the day-by-day forecast, destination, and vehicle mode that are NOT already in `templateItems` (e.g. raincoat/umbrella citing rainy days, snow tires/ice scraper if freezing/snowing while driving, sun hat/sunscreen on high-UV/hot days, windbreaker on windy days${if (TravelerTemplateCatalog.isPlugInfoNeeded(forecast.country, forecast.countryCode, forecast.plugTypes)) ", or ${forecast.plugTypes} power adapter" else "; do NOT suggest a power/plug adapter for USA or India trips"}).
 
                     TRIP DETAILS:
                     - Destination City: ${forecast.city}
-                    - Destination Country: ${forecast.country} (Country Code: ${forecast.countryCode}, International: ${forecast.isInternational}, Plug: ${forecast.plugTypes})
+                    - Destination Country: ${forecast.country} (Country Code: ${forecast.countryCode}, International: ${forecast.isInternational}${if (TravelerTemplateCatalog.isPlugInfoNeeded(forecast.country, forecast.countryCode, forecast.plugTypes)) ", Plug: ${forecast.plugTypes}" else ""})
                     - Duration: $days days (Effective clothing scaling days: $effectiveDays)
                     - Transport / Vehicle: ${carMode.label} (Driving Personal Car: ${carMode == CarTransportMode.OWN_CAR}, Rental Car: ${carMode == CarTransportMode.RENTAL_CAR}, Flying: ${carMode != CarTransportMode.OWN_CAR})
                     - Luggage Space: ${luggageSpace.label}
@@ -469,7 +550,8 @@ class GeminiVoiceAssistant(
 
                 val allowedCategories = PackTrackThemeState.allCategories(customRules.map { it.category })
                 val rawText = callGeminiEvaluateAndSuggest(prompt, allowedCategories)
-                val rootObj = JSONObject(rawText)
+                val cleanJson = extractCleanJson(rawText) ?: rawText
+                val rootObj = JSONObject(cleanJson)
                 val ruleByLowerName = customRules.associateBy { it.name.trim().lowercase() }
 
                 val parsedTemplate = mutableListOf<PackingItemEntity>()
@@ -516,11 +598,13 @@ class GeminiVoiceAssistant(
 
                 val parsedSuggestions = mutableListOf<PackingItemEntity>()
                 val suggestedArr = rootObj.optJSONArray("suggestedItems") ?: JSONArray()
+                val suppressPlug = TravelerTemplateCatalog.isUsaOrIndia(forecast.country, forecast.countryCode, forecast.plugTypes)
                 for (i in 0 until suggestedArr.length()) {
                     val obj = suggestedArr.optJSONObject(i) ?: continue
                     val name = obj.optString("name", "").trim()
                     if (name.isEmpty()) continue
                     val key = name.lowercase()
+                    if (suppressPlug && (key.contains("adapter") || key.contains("plug converter"))) continue
                     if (!seenNames.add(key)) continue
                     val category = PackingCategory.canonicalize(obj.optString("category", "Others"))
                     val qty = obj.optInt("quantity", 1).coerceAtLeast(1)
@@ -546,12 +630,27 @@ class GeminiVoiceAssistant(
                     val finalSuggestions = if (parsedSuggestions.isNotEmpty()) {
                         parsedSuggestions
                     } else {
-                        ChecklistCalculator.buildDynamicWeatherSuggestions(tripId, carMode, forecast, parsedTemplate)
+                        generateWeatherSuggestionsWithGemini(tripId, days, isWork, carMode, luggageSpace, forecast, parsedTemplate)
                     }
                     return Triple(parsedTemplate, finalSuggestions, false)
                 }
             } catch (_: Exception) {
-                // Fall back to deterministic multi-clause evaluator + weather suggestions below
+                // Fall through to Stage 2 lightweight Gemini suggestions call below
+            }
+
+            // Stage 2 Gemini Fallback: if the combined rule+suggestion call failed/timed out,
+            // try the lightweight Gemini suggestions call (2-5 items only) before falling back to rule-based!
+            val stage2Suggestions = tryGenerateSuggestionsViaGeminiOnly(
+                tripId = tripId,
+                days = days,
+                isWork = isWork,
+                carMode = carMode,
+                luggageSpace = luggageSpace,
+                forecast = forecast,
+                templateItems = fallbackTemplateItems
+            )
+            if (stage2Suggestions.isNotEmpty()) {
+                return Triple(fallbackTemplateItems, stage2Suggestions, false)
             }
         }
 
@@ -562,6 +661,91 @@ class GeminiVoiceAssistant(
             existingItems = fallbackTemplateItems
         )
         return Triple(fallbackTemplateItems, fallbackSuggestions, true)
+    }
+
+    private fun tryGenerateSuggestionsViaGeminiOnly(
+        tripId: Long,
+        days: Int,
+        isWork: Boolean,
+        carMode: CarTransportMode,
+        luggageSpace: LuggageSpace,
+        forecast: WeatherForecast,
+        templateItems: List<PackingItemEntity>
+    ): List<PackingItemEntity> {
+        val existingNamesLower = templateItems.map { it.name.trim().lowercase() }.toSet()
+        if (geminiApiKey.isBlank()) return emptyList()
+        try {
+            val dailyWeatherText = if (forecast.dailyBreakdown.isNotEmpty()) {
+                forecast.dailyBreakdown.joinToString("\n") { "  - $it" }
+            } else {
+                "  - Average ${forecast.avgLowF.toInt()}°F low to ${forecast.avgHighF.toInt()}°F high, ${forecast.rainyDaysCount} rainy day(s)"
+            }
+            val alreadyPackedText = templateItems.joinToString(", ") { "${it.name} (x${it.quantity})" }
+            val showPlug = TravelerTemplateCatalog.isPlugInfoNeeded(forecast.country, forecast.countryCode, forecast.plugTypes)
+
+            val prompt = """
+                You are PackTrack's dynamic weather & travel advisor.
+                The user's Default Template items have ALREADY been added to their packing checklist.
+                Now analyze the day-by-day weather forecast, destination, and vehicle/transport mode to suggest 2 to 5 specific, practical additional items or preparations that are NOT already in their template checklist.
+
+                TRIP DETAILS:
+                - Destination: ${forecast.city}, ${forecast.country} (International: ${forecast.isInternational}${if (showPlug) ", Plug: ${forecast.plugTypes}" else ""})
+                - Duration: $days days
+                - Transport / Vehicle: ${carMode.label} (Driving Own Car: ${carMode == CarTransportMode.OWN_CAR}, Rental Car: ${carMode == CarTransportMode.RENTAL_CAR}, Flying: ${carMode != CarTransportMode.OWN_CAR})
+                - Luggage Space: ${luggageSpace.label}
+                - Purpose: ${if (isWork) "Work / Business" else "Leisure"}
+
+                DAY-BY-DAY WEATHER FORECAST:
+                $dailyWeatherText
+
+                ITEMS ALREADY IN CHECKLIST FROM USER'S TEMPLATE (DO NOT DUPLICATE):
+                $alreadyPackedText
+
+                INSTRUCTIONS:
+                - Suggest 2 to 5 specific items or preparations tailored to this forecast and trip mode (for example: if rain is expected on specific days, suggest a raincoat/compact umbrella and mention which days; if very hot or high UV on a day, suggest sunscreen/sun hat/electrolytes; if snow or freezing weather is expected while driving, suggest snow tires/chains or an ice scraper; if windy, suggest a windbreaker${if (showPlug) "; suggest a ${forecast.plugTypes} adapter" else "; do NOT suggest a power/plug adapter for USA or India trips"}).
+                - Make each `reason` conversational, helpful, and specific to the actual forecast days/temperatures.
+
+                Return ONLY a valid JSON array of objects:
+                [{"name":"...","category":"On Me|Docs|Electronics|Clothes|Toiletry|Others","quantity":1,"bagLocation":"Personal|Carry-On|Check-In","reason":"..."}]
+            """.trimIndent()
+
+            val allowedCategories = PackTrackThemeState.allCategories(templateItems.map { it.category })
+            val rawText = callGeminiGenerateContent(prompt, allowedCategories)
+            val cleanJson = extractCleanJson(rawText) ?: rawText
+            val arr = JSONArray(cleanJson)
+            val suggestions = mutableListOf<PackingItemEntity>()
+            val seenSuggested = mutableSetOf<String>()
+            val suppressPlug = !showPlug
+            for (i in 0 until arr.length()) {
+                val obj = arr.optJSONObject(i) ?: continue
+                val name = obj.optString("name", "").trim()
+                if (name.isEmpty()) continue
+                val key = name.lowercase()
+                if (suppressPlug && (key.contains("adapter") || key.contains("plug converter"))) continue
+                if (key in existingNamesLower || !seenSuggested.add(key)) continue
+                val category = PackingCategory.canonicalize(obj.optString("category", "Others"))
+                val qty = obj.optInt("quantity", 1).coerceAtLeast(1)
+                val bag = BagLocation.fromLabel(obj.optString("bagLocation", BagLocation.CARRY_ON.label)).label
+                val reason = ChecklistCalculator.stripSuggestedPrefix(
+                    obj.optString("reason", "Suggested by Gemini for ${forecast.city} weather")
+                )
+                suggestions.add(
+                    PackingItemEntity(
+                        tripId = tripId,
+                        name = name,
+                        category = category,
+                        quantity = qty,
+                        bagLocation = bag,
+                        isDoorwayCritical = false,
+                        isHighLossReturn = true,
+                        weatherReason = "${ChecklistCalculator.SUGGESTED_PREFIX}$reason"
+                    )
+                )
+            }
+            return suggestions
+        } catch (_: Exception) {
+            return emptyList()
+        }
     }
 
     /**
@@ -588,6 +772,7 @@ class GeminiVoiceAssistant(
                     "  - Average ${forecast.avgLowF.toInt()}°F low to ${forecast.avgHighF.toInt()}°F high, ${forecast.rainyDaysCount} rainy day(s)"
                 }
                 val alreadyPackedText = templateItems.joinToString(", ") { "${it.name} (x${it.quantity})" }
+                val showPlug = TravelerTemplateCatalog.isPlugInfoNeeded(forecast.country, forecast.countryCode, forecast.plugTypes)
 
                 val prompt = """
                     You are PackTrack's dynamic weather & travel advisor.
@@ -595,7 +780,7 @@ class GeminiVoiceAssistant(
                     Now analyze the day-by-day weather forecast, destination, and vehicle/transport mode to suggest 2 to 5 specific, practical additional items or preparations that are NOT already in their template checklist.
 
                     TRIP DETAILS:
-                    - Destination: ${forecast.city}, ${forecast.country} (International: ${forecast.isInternational}, Plug: ${forecast.plugTypes})
+                    - Destination: ${forecast.city}, ${forecast.country} (International: ${forecast.isInternational}${if (showPlug) ", Plug: ${forecast.plugTypes}" else ""})
                     - Duration: $days days
                     - Transport / Vehicle: ${carMode.label} (Driving Own Car: ${carMode == CarTransportMode.OWN_CAR}, Rental Car: ${carMode == CarTransportMode.RENTAL_CAR}, Flying: ${carMode != CarTransportMode.OWN_CAR})
                     - Luggage Space: ${luggageSpace.label}
@@ -608,7 +793,7 @@ class GeminiVoiceAssistant(
                     $alreadyPackedText
 
                     INSTRUCTIONS:
-                    - Suggest 2 to 5 specific items or preparations tailored to this forecast and trip mode (for example: if rain is expected on specific days, suggest a raincoat/compact umbrella and mention which days; if very hot or high UV on a day, suggest sunscreen/sun hat/electrolytes; if snow or freezing weather is expected while driving, suggest snow tires/chains or an ice scraper; if windy, suggest a windbreaker; if international with non-US outlets, suggest a ${forecast.plugTypes} adapter).
+                    - Suggest 2 to 5 specific items or preparations tailored to this forecast and trip mode (for example: if rain is expected on specific days, suggest a raincoat/compact umbrella and mention which days; if very hot or high UV on a day, suggest sunscreen/sun hat/electrolytes; if snow or freezing weather is expected while driving, suggest snow tires/chains or an ice scraper; if windy, suggest a windbreaker${if (showPlug) "; suggest a ${forecast.plugTypes} adapter" else "; do NOT suggest a power/plug adapter for USA or India trips"}).
                     - Make each `reason` conversational, helpful, and specific to the actual forecast days/temperatures (e.g. "We expect rain on Day 2 (54°F) — carry a raincoat or compact umbrella", "Very hot on Day 1 (92°F, UV 9) — pack sunscreen and a sun hat", "Snow expected on Day 3 (26°F low) while driving — snow tires/chains or an ice scraper might be needed").
 
                     Return ONLY a valid JSON array of objects:
@@ -623,11 +808,13 @@ class GeminiVoiceAssistant(
                     val arr = JSONArray(rawText.substring(jsonStart, jsonEnd + 1))
                     val suggestions = mutableListOf<PackingItemEntity>()
                     val seenSuggested = mutableSetOf<String>()
+                    val suppressPlug = !showPlug
                     for (i in 0 until arr.length()) {
                         val obj = arr.optJSONObject(i) ?: continue
                         val name = obj.optString("name", "").trim()
                         if (name.isEmpty()) continue
                         val key = name.lowercase()
+                        if (suppressPlug && (key.contains("adapter") || key.contains("plug converter"))) continue
                         if (key in existingNamesLower || !seenSuggested.add(key)) continue
                         val category = PackingCategory.canonicalize(obj.optString("category", "Others"))
                         val qty = obj.optInt("quantity", 1).coerceAtLeast(1)
@@ -742,15 +929,15 @@ class GeminiVoiceAssistant(
 
     private fun resolveModelCascade(): List<String> {
         val now = System.currentTimeMillis()
-        val existing = cachedCascade
+        val existing = cachedDiscoveredModels
         if (!existing.isNullOrEmpty() && now - cachedCascadeAtMs < 3600_000L) {
             return rankModelIds(existing)
         }
         try {
             val conn = (URL("$MODELS_BASE_URL?key=$geminiApiKey").openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 5000
-                readTimeout = 5000
+                connectTimeout = 6000
+                readTimeout = 6000
             }
             if (conn.responseCode in 200..299) {
                 val body = conn.inputStream.bufferedReader().use { it.readText() }
@@ -778,10 +965,9 @@ class GeminiVoiceAssistant(
                     }
                 }
                 if (discovered.isNotEmpty()) {
-                    val ranked = rankModelIds(discovered)
-                    cachedCascade = ranked
+                    cachedDiscoveredModels = discovered
                     cachedCascadeAtMs = now
-                    return ranked
+                    return rankModelIds(discovered)
                 }
             }
         } catch (_: Exception) {
@@ -790,57 +976,98 @@ class GeminiVoiceAssistant(
         return rankModelIds(emptyList())
     }
 
-    private fun postGeminiStructuredRequest(prompt: String, responseSchema: JSONObject): String {
-        val payload = JSONObject().apply {
-            put(
-                "contents",
-                JSONArray().put(
+    private fun postGeminiStructuredRequest(
+        prompt: String,
+        responseSchema: JSONObject,
+        maxRetriesPerModel: Int = 2
+    ): String {
+        fun buildPayloadBytes(includeSchema: Boolean): ByteArray {
+            val payload = JSONObject().apply {
+                put(
+                    "contents",
+                    JSONArray().put(
+                        JSONObject().apply {
+                            put("role", "user")
+                            put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                        }
+                    )
+                )
+                put(
+                    "generationConfig",
                     JSONObject().apply {
-                        put("role", "user")
-                        put("parts", JSONArray().put(JSONObject().put("text", prompt)))
+                        put("temperature", 0.2)
+                        put("responseMimeType", "application/json")
+                        if (includeSchema) {
+                            put("responseSchema", responseSchema)
+                        }
                     }
                 )
-            )
-            put(
-                "generationConfig",
-                JSONObject().apply {
-                    put("temperature", 0.2)
-                    put("responseMimeType", "application/json")
-                    put("responseSchema", responseSchema)
-                }
-            )
+            }
+            return payload.toString().toByteArray(Charsets.UTF_8)
         }
 
-        val payloadBytes = payload.toString().toByteArray(Charsets.UTF_8)
-        val cascade = resolveModelCascade()
-        for (modelId in cascade) {
-            try {
-                val conn = (URL("$MODELS_BASE_URL/$modelId:generateContent?key=$geminiApiKey").openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json")
-                    connectTimeout = 7000
-                    readTimeout = 10000
-                    doOutput = true
+        val schemaBytes = buildPayloadBytes(includeSchema = true)
+        val plainJsonBytes = buildPayloadBytes(includeSchema = false)
+        val primaryCascade = resolveModelCascade()
+        val fullCascade = primaryCascade + EMERGENCY_LAST_RESORT_MODELS.filterNot { it in primaryCascade }
+
+        for (modelId in fullCascade) {
+            var useSchema = true
+            for (attempt in 0..maxRetriesPerModel) {
+                try {
+                    val conn = (URL("$MODELS_BASE_URL/$modelId:generateContent?key=$geminiApiKey").openConnection() as HttpURLConnection).apply {
+                        requestMethod = "POST"
+                        setRequestProperty("Content-Type", "application/json")
+                        connectTimeout = 10000
+                        readTimeout = 25000
+                        doOutput = true
+                    }
+                    conn.outputStream.use { it.write(if (useSchema) schemaBytes else plainJsonBytes) }
+                    val status = conn.responseCode
+                    if (status !in 200..299) {
+                        // If a model rejects nested responseSchema with 400, retry immediately with plain JSON mode
+                        if (status == 400 && useSchema) {
+                            useSchema = false
+                            continue
+                        }
+                        // 404 (model not found) or 401/403 -> immediately try next model in cascade
+                        if (status == 404 || status == 401 || status == 403) {
+                            break
+                        }
+                        // Transient 429 / 5xx / 408 -> backoff and retry on this model before failing over
+                        if (attempt < maxRetriesPerModel) {
+                            Thread.sleep(350L * (attempt + 1))
+                            continue
+                        }
+                        break
+                    }
+                    val responseText = conn.inputStream.bufferedReader().use { it.readText() }
+                    val json = JSONObject(responseText)
+                    val text = json.optJSONArray("candidates")
+                        ?.optJSONObject(0)
+                        ?.optJSONObject("content")
+                        ?.optJSONArray("parts")
+                        ?.optJSONObject(0)
+                        ?.optString("text", "") ?: ""
+                    val cleanJson = extractCleanJson(text)
+                    if (cleanJson != null) {
+                        lastWorkingModel = modelId
+                        return cleanJson
+                    }
+                    if (attempt < maxRetriesPerModel) {
+                        Thread.sleep(350L * (attempt + 1))
+                    }
+                } catch (_: Exception) {
+                    if (attempt < maxRetriesPerModel) {
+                        try {
+                            Thread.sleep(350L * (attempt + 1))
+                        } catch (_: Exception) {
+                        }
+                    }
                 }
-                conn.outputStream.use { it.write(payloadBytes) }
-                if (conn.responseCode !in 200..299) continue
-                val responseText = conn.inputStream.bufferedReader().use { it.readText() }
-                val json = JSONObject(responseText)
-                val text = json.optJSONArray("candidates")
-                    ?.optJSONObject(0)
-                    ?.optJSONObject("content")
-                    ?.optJSONArray("parts")
-                    ?.optJSONObject(0)
-                    ?.optString("text", "") ?: ""
-                if (text.isNotBlank()) {
-                    lastWorkingModel = modelId
-                    return text
-                }
-            } catch (_: Exception) {
-                // Try next model in cascade
             }
         }
-        throw IllegalStateException("All Gemini models in cascade failed.")
+        throw IllegalStateException("All Gemini models in cascade failed after retries.")
     }
 
     private suspend fun handleLocalSmartVoiceTurn(userSpeech: String, activeTripId: Long?): String {

@@ -241,6 +241,16 @@ class ChecklistCalculatorEvalTest {
         assertFalse(ranked.contains("gemini-3.8-flash-tts"))
         assertFalse(ranked.contains("gemini-2.5-flash"))
         assertFalse(ranked.contains("gemini-2.0-flash"))
+
+        // 5. JSON extractor strips markdown fences and rejects truncated JSON so cascade retries/fails over
+        assertEquals(
+            "{\"templateItems\":[]}",
+            com.packtrack.app.agent.GeminiVoiceAssistant.extractCleanJson("```json\n{\"templateItems\":[]}\n```")
+        )
+        assertEquals(
+            null,
+            com.packtrack.app.agent.GeminiVoiceAssistant.extractCleanJson("{\"templateItems\":[{\"name\":\"Laptop\"")
+        )
     }
 
     @Test
@@ -376,6 +386,27 @@ class ChecklistCalculatorEvalTest {
         assertFalse(dedupedNames.contains("Raincoat / Compact Umbrella"))
         assertFalse(dedupedNames.contains("Power Adapter (Type G (UK 3-pin))"))
         assertFalse(dedupedNames.contains("Ice Scraper / Snow Tire Check")) // NO_CAR -> no ice scraper
+
+        // 3. USA and India trips must NOT display plug callout or suggest a Power Adapter
+        assertFalse(TravelerTemplateCatalog.isPlugInfoNeeded("United States", "US", "Type A/B"))
+        assertFalse(TravelerTemplateCatalog.isPlugInfoNeeded("India", "IN", "Type C/D/M (230V)"))
+        assertTrue(TravelerTemplateCatalog.isPlugInfoNeeded("United Kingdom", "GB", "Type G (UK 3-pin)"))
+        assertTrue(TravelerTemplateCatalog.isPlugInfoNeeded("Japan", "JP", "Type A/B (100V)"))
+
+        val indiaForecast = sampleForecast.copy(
+            city = "Mumbai",
+            country = "India",
+            countryCode = "IN",
+            plugTypes = "Type C/D/M (230V)",
+            isInternational = true
+        )
+        val indiaSuggestions = ChecklistCalculator.buildDynamicWeatherSuggestions(
+            tripId = 42L,
+            carMode = CarTransportMode.NO_CAR,
+            forecast = indiaForecast,
+            existingItems = emptyList()
+        )
+        assertFalse(indiaSuggestions.any { it.name.contains("Adapter", ignoreCase = true) })
     }
 
     @Test

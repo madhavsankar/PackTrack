@@ -148,7 +148,11 @@ fun TripChecklistScreen(
                                 )
                             }
                         }
-                        val plugSuffix = if (activeTrip.plugTypes.startsWith("Type A/B")) "" else "  •  ${activeTrip.plugTypes}"
+                        val showPlug = com.packtrack.app.domain.TravelerTemplateCatalog.isPlugInfoNeeded(
+                            country = activeTrip.country,
+                            plugTypes = activeTrip.plugTypes
+                        )
+                        val plugSuffix = if (showPlug) "  •  Plug ${activeTrip.plugTypes}" else ""
                         val tempRange = com.packtrack.app.ui.theme.PackTrackThemeState.formatTempRange(activeTrip.avgLowF, activeTrip.avgHighF)
                         Text(
                             text = "$dateRangeStr (${activeTrip.durationDays}d)  •  $tempRange  •  ${activeTrip.rainyDaysCount} rainy d$plugSuffix",

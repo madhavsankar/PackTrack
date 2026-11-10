@@ -313,6 +313,10 @@ def build_complete_checklist(
             reason = mod.get("label", tag.title())
             item_name = rule["name"]
             if tag == "international" and "Adapter" in item_name:
+                if (weather.country_code or "").strip().upper() in ("US", "USA", "IN", "IND") or (
+                    weather.country or ""
+                ).strip().lower() in ("united states", "united states of america", "usa", "us", "india", "in"):
+                    continue
                 item_name = f"Power Adapter ({weather.plug_types})"
                 reason = f"Required for {weather.country} outlets"
 

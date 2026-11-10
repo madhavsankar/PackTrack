@@ -320,7 +320,7 @@ object ChecklistCalculator {
             )
         }
 
-        if (forecast.isInternational && !forecast.plugTypes.startsWith("Type A/B") && existingLower.none { it.contains("adapter") }) {
+        if (TravelerTemplateCatalog.isPlugInfoNeeded(forecast.country, forecast.countryCode, forecast.plugTypes) && existingLower.none { it.contains("adapter") }) {
             addSuggestion(
                 name = "Power Adapter (${forecast.plugTypes})",
                 category = PackingCategory.ELECTRONICS,

@@ -463,6 +463,37 @@ class TestPackTrackEngine(unittest.TestCase):
             { fetchImpl: mockFetch, cascadeOverride: ranked }
           );
 
+          // Simulate transient failure on attempt 1 (truncated JSON) followed by success on retry 2 of same model
+          let retryCount = 0;
+          const retryMockFetch = async () => {
+            retryCount++;
+            if (retryCount === 1) {
+              return {
+                ok: true,
+                json: async () => ({
+                  candidates: [{ content: { parts: [{ text: '[{"name":"Truncated' }] } }]
+                })
+              };
+            }
+            return {
+              ok: true,
+              json: async () => ({
+                candidates: [{ content: { parts: [{ text: '```json\\n[{"name":"Raincoat","category":"Clothes","quantity":1,"bagLocation":"Carry-On","reason":"Rain expected"}]\\n```' }] } }]
+              })
+            };
+          };
+          const retryRes = await PackingEngineService.callGeminiWithModelCascade(
+            { contents: [] },
+            'test-key',
+            { fetchImpl: retryMockFetch, cascadeOverride: ['gemini-3.8-flash'] }
+          );
+
+          // Verify plug info needed only for non-USA and non-India
+          const plugUs = PackingEngineService.isPlugInfoNeeded('United States', 'US', 'Type A/B');
+          const plugIn = PackingEngineService.isPlugInfoNeeded('India', 'IN', 'Type C/D/M');
+          const plugGb = PackingEngineService.isPlugInfoNeeded('United Kingdom', 'GB', 'Type G');
+          const plugJp = PackingEngineService.isPlugInfoNeeded('Japan', 'JP', 'Type A/B');
+
           const out = JSON.stringify({
             firstModel: ranked[0],
             ranked,
@@ -470,7 +501,13 @@ class TestPackTrackEngine(unittest.TestCase):
               ['text-embedding-004', 'gemma-4-31b-it', 'gemini-3.1-flash-image', 'gemini-3-pro-image', 'gemini-omni-1.1-flash', 'gemini-2.5-flash', 'gemini-3.8-flash-tts'].includes(id)
             ),
             attempted,
-            modelUsed: res ? res.modelUsed : null
+            modelUsed: res ? res.modelUsed : null,
+            retryAttempts: retryRes ? retryRes.attemptsOnModel : 0,
+            retryModelUsed: retryRes ? retryRes.modelUsed : null,
+            plugUs,
+            plugIn,
+            plugGb,
+            plugJp
           });
           if (typeof console !== 'undefined' && console.log) console.log(out);
           else if (typeof print !== 'undefined') print(out);
@@ -495,6 +532,12 @@ class TestPackTrackEngine(unittest.TestCase):
             result["ranked"].index("gemini-4-argon"),
         )
         self.assertEqual(result["modelUsed"], "gemini-3.2-flash-lite")
+        self.assertEqual(result["retryAttempts"], 2)
+        self.assertEqual(result["retryModelUsed"], "gemini-3.8-flash")
+        self.assertFalse(result["plugUs"])
+        self.assertFalse(result["plugIn"])
+        self.assertTrue(result["plugGb"])
+        self.assertTrue(result["plugJp"])
 
     def test_eval_db_crud_and_custom_rules_persistence(self):
         """Eval: Verifies SQLite persistence for profiles, custom template items, trips, and item checkoff statistics."""
@@ -551,8 +594,12 @@ class TestPackTrackEngine(unittest.TestCase):
         step_back_method = webapp_src[start_idx:end_idx]
 
         fmt_start = webapp_src.index("formatDateRange(rawStartDate, durationDays, rawEndDate) {")
-        fmt_end = webapp_src.index("setAccentHue(hueVal) {")
+        fmt_end = webapp_src.index("isPlugInfoNeeded(country, countryCode, plugTypes) {")
         fmt_method = webapp_src[fmt_start:fmt_end].replace("\\`", "`").replace("\\$", "$")
+
+        plug_start = webapp_src.index("isPlugInfoNeeded(country, countryCode, plugTypes) {")
+        plug_end = webapp_src.index("setAccentHue(hueVal) {")
+        plug_method = webapp_src[plug_start:plug_end].replace("\\`", "`").replace("\\$", "$")
 
         js_harness = f"""
         const app = {{
@@ -562,7 +609,8 @@ class TestPackTrackEngine(unittest.TestCase):
           render() {{ this.renderCalls++; }},
           navigateHome() {{ this.currentScreen = 'home'; }},
           {step_back_method},
-          {fmt_method}
+          {fmt_method},
+          {plug_method}
         }};
         const stepsVisited = [app.iv.step];
         while (app.currentScreen === 'interview') {{
@@ -583,8 +631,11 @@ class TestPackTrackEngine(unittest.TestCase):
         const sameMonthRange = app.formatDateRange('2026-11-10', 4);
         const crossMonthRange = app.formatDateRange('2026-11-28', 5);
         const crossYearRange = app.formatDateRange('2026-12-29', 5, '2027-01-03');
+        const plugUs = app.isPlugInfoNeeded('United States', 'US', 'Type A/B');
+        const plugIn = app.isPlugInfoNeeded('India', 'IN', 'Type C/D/M');
+        const plugGb = app.isPlugInfoNeeded('United Kingdom', 'GB', 'Type G');
 
-        const out = JSON.stringify({{ stepsVisited, ownCarPrevStep, sameMonthRange, crossMonthRange, crossYearRange }});
+        const out = JSON.stringify({{ stepsVisited, ownCarPrevStep, sameMonthRange, crossMonthRange, crossYearRange, plugUs, plugIn, plugGb }});
         if (typeof console !== 'undefined' && console.log) console.log(out);
         else if (typeof print !== 'undefined') print(out);
         """
@@ -602,6 +653,9 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertEqual(res["sameMonthRange"], "Nov 10–14")
         self.assertEqual(res["crossMonthRange"], "Nov 28 – Dec 3")
         self.assertEqual(res["crossYearRange"], "Dec 29, 2026 – Jan 3, 2027")
+        self.assertFalse(res["plugUs"])
+        self.assertFalse(res["plugIn"])
+        self.assertTrue(res["plugGb"])
 
     def test_eval_android_best_practices_and_back_navigation_guards(self):
         """Eval: Guards AndroidManifest.xml and Compose UI screens against regressions in back navigation, state saving, and responsive layout."""

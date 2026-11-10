@@ -44,12 +44,21 @@ export class PackingEngineService {
     "gemini-flash-latest",
     "gemini-3.8-flash",
     "gemini-3.6-flash",
+    "gemini-3-flash-preview",
     "gemini-3.5-flash-lite",
     "gemini-3.1-flash-lite",
+    "gemini-3.1-flash-lite-preview",
     "gemini-flash-lite-latest",
+    "gemini-3.1-pro-preview",
+    "gemini-pro-latest",
   ];
 
-  static _cachedCascade = null;
+  static EMERGENCY_LAST_RESORT_MODELS = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+  ];
+
+  static _cachedDiscoveredModels = null;
   static _cachedCascadeAt = 0;
   static _lastWorkingModel = null;
 
@@ -187,11 +196,11 @@ export class PackingEngineService {
   static async resolveModelCascade(geminiApiKey, fetchImpl = fetch) {
     const now = Date.now();
     if (
-      PackingEngineService._cachedCascade &&
-      PackingEngineService._cachedCascade.length > 0 &&
+      PackingEngineService._cachedDiscoveredModels &&
+      PackingEngineService._cachedDiscoveredModels.length > 0 &&
       now - PackingEngineService._cachedCascadeAt < 3600_000
     ) {
-      return PackingEngineService.rankModelsFromList(PackingEngineService._cachedCascade);
+      return PackingEngineService.rankModelsFromList(PackingEngineService._cachedDiscoveredModels);
     }
 
     try {
@@ -200,10 +209,9 @@ export class PackingEngineService {
       if (resp.ok) {
         const data = await resp.json();
         if (Array.isArray(data?.models) && data.models.length > 0) {
-          const ranked = PackingEngineService.rankModelsFromList(data.models);
-          PackingEngineService._cachedCascade = ranked;
+          PackingEngineService._cachedDiscoveredModels = data.models;
           PackingEngineService._cachedCascadeAt = now;
-          return ranked;
+          return PackingEngineService.rankModelsFromList(data.models);
         }
       }
     } catch (_) {
@@ -213,35 +221,120 @@ export class PackingEngineService {
   }
 
   /**
-   * Executes a `generateContent` request across the ranked model cascade, automatically
-   * failing over if a model is deprecated (404), rate-limited (429), or overloaded (5xx).
+   * Strips optional markdown code fences and extracts valid JSON (`{...}` or `[...]`).
    */
-  static async callGeminiWithModelCascade(requestBody, geminiApiKey, { fetchImpl = fetch, cascadeOverride = null } = {}) {
+  static extractCleanJson(rawText) {
+    const cleaned = String(rawText || "")
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+    if (!cleaned) return null;
+    try {
+      JSON.parse(cleaned);
+      return cleaned;
+    } catch (_) {
+      const objStart = cleaned.indexOf("{");
+      const objEnd = cleaned.lastIndexOf("}");
+      const arrStart = cleaned.indexOf("[");
+      const arrEnd = cleaned.lastIndexOf("]");
+      const candidates = [];
+      if (objStart !== -1 && objEnd > objStart) candidates.push(cleaned.slice(objStart, objEnd + 1));
+      if (arrStart !== -1 && arrEnd > arrStart) candidates.push(cleaned.slice(arrStart, arrEnd + 1));
+      for (const cand of candidates) {
+        try {
+          JSON.parse(cand);
+          return cand;
+        } catch (_) {
+          // Try next candidate
+        }
+      }
+      return null;
+    }
+  }
+
+  /**
+   * Executes a `generateContent` request across the ranked model cascade, retrying transient
+   * errors (429, 5xx, network, or truncated JSON) up to `maxRetriesPerModel` times per model
+   * and automatically failing over across all fallback models.
+   */
+  static async callGeminiWithModelCascade(
+    requestBody,
+    geminiApiKey,
+    { fetchImpl = fetch, cascadeOverride = null, maxRetriesPerModel = 2, retryDelayMs = null } = {}
+  ) {
     const cleanKey = String(geminiApiKey || "").trim();
     if (!cleanKey) return null;
 
-    const cascade =
+    const primaryCascade =
       Array.isArray(cascadeOverride) && cascadeOverride.length > 0
         ? cascadeOverride
         : await PackingEngineService.resolveModelCascade(cleanKey, fetchImpl);
 
-    for (const modelId of cascade) {
-      try {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
-        const resp = await fetchImpl(url, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(requestBody),
-        });
-        if (!resp.ok) continue;
-        const data = await resp.json();
-        const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-        if (text.trim()) {
-          PackingEngineService._lastWorkingModel = modelId;
-          return { data, modelUsed: modelId };
+    const fullCascade = Array.isArray(cascadeOverride) && cascadeOverride.length > 0
+      ? primaryCascade
+      : [...primaryCascade, ...PackingEngineService.EMERGENCY_LAST_RESORT_MODELS.filter((m) => !primaryCascade.includes(m))];
+
+    const baseDelay =
+      typeof retryDelayMs === "number"
+        ? retryDelayMs
+        : typeof fetch !== "undefined" && fetchImpl === fetch
+        ? 350
+        : 0;
+
+    const sleep = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
+
+    for (const modelId of fullCascade) {
+      let currentBody = requestBody;
+      for (let attempt = 0; attempt <= maxRetriesPerModel; attempt++) {
+        try {
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
+          const resp = await fetchImpl(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(currentBody),
+          });
+          if (!resp.ok) {
+            const status = Number(resp.status) || 0;
+            // If a model rejects nested responseSchema with 400, retry immediately with plain JSON mode
+            if (status === 400 && currentBody?.generationConfig?.responseSchema) {
+              const { responseSchema, ...restGenConfig } = currentBody.generationConfig;
+              currentBody = {
+                ...currentBody,
+                generationConfig: { ...restGenConfig, responseMimeType: "application/json" },
+              };
+              continue;
+            }
+            // 404 (model not found) or 403/401 -> immediately move to next model in cascade
+            if (status === 404 || status === 401 || status === 403) {
+              break;
+            }
+            // Retry on transient 429 / 5xx / 408 before failing over to next model
+            if (attempt < maxRetriesPerModel) {
+              await sleep(baseDelay * (attempt + 1));
+              continue;
+            }
+            break;
+          }
+          const data = await resp.json();
+          const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+          const validJson = PackingEngineService.extractCleanJson(rawText);
+          if (validJson) {
+            // Normalize the text part to the clean JSON string so callers can parse safely
+            if (data?.candidates?.[0]?.content?.parts?.[0]) {
+              data.candidates[0].content.parts[0].text = validJson;
+            }
+            PackingEngineService._lastWorkingModel = modelId;
+            return { data, modelUsed: modelId, attemptsOnModel: attempt + 1 };
+          }
+          // Truncated or empty response -> retry before moving to next model
+          if (attempt < maxRetriesPerModel) {
+            await sleep(baseDelay * (attempt + 1));
+          }
+        } catch (_) {
+          if (attempt < maxRetriesPerModel) {
+            await sleep(baseDelay * (attempt + 1));
+          }
         }
-      } catch (_) {
-        // Try next model in cascade
       }
     }
     return null;
@@ -564,6 +657,25 @@ export class PackingEngineService {
     return result;
   }
 
+  static isUsaOrIndia(country, countryCode, plugTypes) {
+    const code = String(countryCode || "").trim().toUpperCase();
+    if (["US", "USA", "IN", "IND"].includes(code)) return true;
+    const c = String(country || "").trim().toLowerCase();
+    if (["united states", "united states of america", "usa", "us", "u.s.", "u.s.a.", "india", "in", "bharat"].includes(c)) {
+      return true;
+    }
+    const p = String(plugTypes || "").trim();
+    if (!c && !code && (p === "Type A/B" || p.startsWith("Type A/B (120V)") || p.startsWith("Type C/D/M"))) {
+      return true;
+    }
+    return false;
+  }
+
+  static isPlugInfoNeeded(country, countryCode, plugTypes) {
+    if (PackingEngineService.isUsaOrIndia(country, countryCode, plugTypes)) return false;
+    return Boolean(String(plugTypes || "").trim());
+  }
+
   /**
    * Builds the exact Gemini `generateContent` request body using native Structured Outputs
    * (`responseMimeType: "application/json"` + `responseSchema`) so Gemini is constrained
@@ -585,6 +697,7 @@ export class PackingEngineService {
       ? weather.dailyBreakdown.map((d) => `  - ${d}`).join("\n")
       : `  - Average ${Math.round(weather?.avgLowF ?? 52)}°F low to ${Math.round(weather?.avgHighF ?? 68)}°F high, ${weather?.rainyDaysCount ?? 0} rainy day(s)`;
     const packedList = (templateItems || []).map((i) => `${i.name} (x${i.quantity})`).join(", ");
+    const showPlug = PackingEngineService.isPlugInfoNeeded(weather?.country, weather?.countryCode, weather?.plugTypes);
 
     const prompt = [
       "You are PackTrack's dynamic weather & travel advisor.",
@@ -592,7 +705,7 @@ export class PackingEngineService {
       "Analyze the day-by-day weather forecast, destination, and vehicle/transport mode to suggest 2 to 5 specific, practical additional items or preparations that are NOT already in their template checklist.",
       "",
       "TRIP DETAILS:",
-      `- Destination: ${weather?.city}, ${weather?.country} (International: ${Boolean(weather?.isInternational)}, Plug: ${weather?.plugTypes})`,
+      `- Destination: ${weather?.city}, ${weather?.country} (International: ${Boolean(weather?.isInternational)}${showPlug ? `, Plug: ${weather?.plugTypes}` : ""})`,
       `- Duration: ${durationDays} days`,
       `- Transport / Vehicle: ${isPersonalCar ? "Driving Personal Car" : isRentalCar ? "Flight + Rental Car" : "Flight / Transit Only"}`,
       `- Purpose: ${isWork ? "Work / Business" : "Leisure"}`,
@@ -605,7 +718,7 @@ export class PackingEngineService {
       packedList || "None",
       "",
       "INSTRUCTIONS:",
-      "- Suggest 2 to 5 specific items or preparations tailored to this forecast and trip mode (e.g., if rain is expected on specific days, suggest a raincoat/compact umbrella and mention which days; if very hot or high UV on a day, suggest sunscreen/sun hat/hydration; if snow or freezing weather is expected while driving, suggest snow tires/chains or an ice scraper; if windy, suggest a windbreaker; if international with non-US outlets, suggest a power adapter).",
+      `- Suggest 2 to 5 specific items or preparations tailored to this forecast and trip mode (e.g., if rain is expected on specific days, suggest a raincoat/compact umbrella and mention which days; if very hot or high UV on a day, suggest sunscreen/sun hat/hydration; if snow or freezing weather is expected while driving, suggest snow tires/chains or an ice scraper; if windy, suggest a windbreaker; ${showPlug ? `suggest a ${weather?.plugTypes} power adapter` : "do NOT suggest a power/plug adapter for USA or India trips"}).`,
       "- Make each `reason` conversational, helpful, and specific to the actual forecast days/temperatures.",
     ].join("\n");
 
@@ -649,7 +762,7 @@ export class PackingEngineService {
    */
   static parseGeminiSuggestionResponse(
     responseData,
-    { existingNames = new Set(), city = "destination", allowedCategories = null } = {}
+    { existingNames = new Set(), city = "destination", allowedCategories = null, suppressPlug = false } = {}
   ) {
     const rawText = responseData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const start = rawText.indexOf("[");
@@ -674,6 +787,7 @@ export class PackingEngineService {
       const name = String(obj.name || "").trim();
       if (!name) continue;
       const key = name.toLowerCase();
+      if (suppressPlug && (key.includes("adapter") || key.includes("plug converter"))) continue;
       if (existingNames.has(key) || seen.has(key)) continue;
       seen.add(key);
 
@@ -714,6 +828,7 @@ export class PackingEngineService {
     const isPersonalCar = tagSet.has("own_car") || tagSet.has("personal_car");
     const isRentalCar = tagSet.has("rental_car");
     const isDriving = isPersonalCar || isRentalCar;
+    const suppressPlug = PackingEngineService.isUsaOrIndia(weather?.country, weather?.countryCode, weather?.plugTypes);
 
     if (geminiApiKey && String(geminiApiKey).trim()) {
       try {
@@ -729,6 +844,7 @@ export class PackingEngineService {
           const suggestions = PackingEngineService.parseGeminiSuggestionResponse(cascadeResult.data, {
             existingNames,
             city: weather?.city || "destination",
+            suppressPlug,
           });
           if (suggestions.length > 0) {
             return suggestions;
@@ -828,7 +944,10 @@ export class PackingEngineService {
       );
     }
 
-    if (weather?.isInternational && !String(weather.plugTypes || "").startsWith("Type A/B") && !hasMatch(["adapter"])) {
+    if (
+      PackingEngineService.isPlugInfoNeeded(weather?.country, weather?.countryCode, weather?.plugTypes) &&
+      !hasMatch(["adapter"])
+    ) {
       addSuggestion(
         `Power Adapter (${weather.plugTypes})`,
         "Electronics",
@@ -849,13 +968,15 @@ export class PackingEngineService {
     return suggestions;
   }
 
-  static async evaluateTemplateAndSuggestWithGemini({ weather, durationDays = 3, tags = [], customRules = [], geminiApiKey = "" }) {
+  static async evaluateTemplateAndSuggestWithGemini({ weather, durationDays = 3, tags = [], customRules = [], geminiApiKey = "", fetchImpl = fetch }) {
     const fallbackTemplateItems = PackingEngineService.buildTripChecklist({
       weather,
       durationDays,
       tags,
       customRules,
     });
+    const showPlug = PackingEngineService.isPlugInfoNeeded(weather?.country, weather?.countryCode, weather?.plugTypes);
+    const suppressPlug = !showPlug;
 
     if (geminiApiKey && String(geminiApiKey).trim()) {
       try {
@@ -890,14 +1011,14 @@ export class PackingEngineService {
           "TASK 1 (`templateItems` — Evaluate User's Default Template Rules):",
           "Evaluate EVERY item in the user's Default Template below against the TRIP DETAILS and DAY-BY-DAY WEATHER FORECAST.",
           '- Include an item in `templateItems` IF AND ONLY IF its `Condition` is satisfied for this trip (e.g., "Always" is always included; "Only when working" or "if work is expected to be done" is included only when Purpose is Work; complex natural-language conditions like "Only add this when there is at least one rainy day and if trip is for more than 5 days and only when we go to India" are included only when ALL parts of that condition hold true for this trip).',
-          "- If `scale_by_days=true`, compute `quantity = ceil(effectiveDays * ratio)`. Otherwise `quantity = 1`.",
+          "- If `scale_by_days=true`, compute `quantity = ceil(effectiveDays * ratio)`. Otherwise `quantity = 1`. Keep `reason` concise (max 8 words) for templateItems.",
           "",
           "TASK 2 (`suggestedItems` — Dynamic Weather & Trip Suggestions):",
-          `Suggest 2 to 5 additional practical items or preparations tailored to the day-by-day forecast, destination, and vehicle mode that are NOT already in \`templateItems\` (e.g., raincoat/umbrella citing rainy days, snow tires/ice scraper if freezing/snowing while driving, sun hat/sunscreen on high-UV/hot days, windbreaker on windy days, or ${weather?.plugTypes} power adapter if international).`,
+          `Suggest 2 to 5 additional practical items or preparations tailored to the day-by-day forecast, destination, and vehicle mode that are NOT already in \`templateItems\` (e.g., raincoat/umbrella citing rainy days, snow tires/ice scraper if freezing/snowing while driving, sun hat/sunscreen on high-UV/hot days, windbreaker on windy days${showPlug ? `, or ${weather?.plugTypes} power adapter` : "; do NOT suggest a power/plug adapter for USA or India trips"}).`,
           "",
           "TRIP DETAILS:",
           `- Destination City: ${weather?.city}`,
-          `- Destination Country: ${weather?.country} (Country Code: ${weather?.countryCode}, International: ${Boolean(weather?.isInternational)}, Plug: ${weather?.plugTypes})`,
+          `- Destination Country: ${weather?.country} (Country Code: ${weather?.countryCode}, International: ${Boolean(weather?.isInternational)}${showPlug ? `, Plug: ${weather?.plugTypes}` : ""})`,
           `- Duration: ${days} days (Effective clothing scaling days: ${effectiveDays})`,
           `- Transport / Vehicle: ${isPersonalCar ? "Driving Personal Car" : isRentalCar ? "Flight + Rental Car" : "Flight / Transit Only"}`,
           `- Purpose: ${isWork ? "Work / Business (isWork=true)" : "Leisure / Personal (isWork=false)"}`,
@@ -947,11 +1068,12 @@ export class PackingEngineService {
           },
         };
 
-        const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey);
+        const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey, { fetchImpl });
         if (cascadeResult?.data) {
           const data = cascadeResult.data;
           const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          const parsedRoot = JSON.parse(rawText);
+          const cleanJson = PackingEngineService.extractCleanJson(rawText) || rawText;
+          const parsedRoot = JSON.parse(cleanJson);
           if (parsedRoot && Array.isArray(parsedRoot.templateItems)) {
             const ruleByLowerName = new Map(
               (customRules || []).map((r) => [String(r.name || "").trim().toLowerCase(), r])
@@ -994,6 +1116,7 @@ export class PackingEngineService {
               const name = String(obj?.name || "").trim();
               if (!name) continue;
               const key = name.toLowerCase();
+              if (suppressPlug && (key.includes("adapter") || key.includes("plug converter"))) continue;
               if (seen.has(key)) continue;
               seen.add(key);
               const rawReason = String(obj?.reason || `Suggested for ${weather?.city} weather`)
@@ -1021,14 +1144,39 @@ export class PackingEngineService {
                       durationDays,
                       tags,
                       templateItems,
-                      geminiApiKey: "",
+                      geminiApiKey,
                     });
               return { templateItems, suggestedItems: finalSuggested, usedFallback: false };
             }
           }
         }
       } catch (_) {
-        // Fall through to deterministic multi-clause evaluator + suggestions
+        // Fall through to Stage 2 lightweight Gemini suggestions call
+      }
+
+      // Stage 2 Gemini Fallback: if the combined rule+suggestion call failed/timed out,
+      // try the lightweight Gemini suggestions call (2-5 items only) before falling back to rule-based!
+      try {
+        const existingNames = new Set((fallbackTemplateItems || []).map((i) => String(i.name || "").trim().toLowerCase()));
+        const stage2Payload = PackingEngineService.buildGeminiSuggestionRequestPayload({
+          weather,
+          durationDays,
+          tags,
+          templateItems: fallbackTemplateItems,
+        });
+        const stage2Result = await PackingEngineService.callGeminiWithModelCascade(stage2Payload, geminiApiKey, { fetchImpl });
+        if (stage2Result?.data) {
+          const stage2Suggestions = PackingEngineService.parseGeminiSuggestionResponse(stage2Result.data, {
+            existingNames,
+            city: weather?.city || "destination",
+            suppressPlug,
+          });
+          if (stage2Suggestions.length > 0) {
+            return { templateItems: fallbackTemplateItems, suggestedItems: stage2Suggestions, usedFallback: false };
+          }
+        }
+      } catch (_) {
+        // Both Stage 1 and Stage 2 Gemini calls failed; fall through to rule-based backup
       }
     }
 
