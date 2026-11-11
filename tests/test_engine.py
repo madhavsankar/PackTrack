@@ -690,6 +690,20 @@ class TestPackTrackEngine(unittest.TestCase):
             trip_kt = f.read()
         self.assertIn("FlowRow(", trip_kt)
         self.assertIn("formatDateRange(", trip_kt)
+        self.assertIn("parseTripTags(", trip_kt)
+        self.assertIn("newCarMode = editCarMode", trip_kt)
+
+        # Verify Recreate Trip modal pre-populates current details and sends overrides in WebAppView.js & HttpRouter.js
+        webapp_path = os.path.join(root_dir, "cloudflare", "src", "ui", "WebAppView.js")
+        with open(webapp_path, "r", encoding="utf-8") as f:
+            webapp_js = f.read()
+        self.assertIn('id="rt-start-date"', webapp_js)
+        self.assertIn('id="rt-end-date"', webapp_js)
+        self.assertIn('id="rt-car"', webapp_js)
+        self.assertIn('id="rt-purpose"', webapp_js)
+        self.assertIn('id="rt-luggage"', webapp_js)
+        self.assertIn("onRecreateDateChange()", webapp_js)
+        self.assertIn("onRecreateCarChange()", webapp_js)
 
         # Verify 10-year (until explicit Sign Out) login session persistence in HttpRouter.js, WebAppView.js, and ChecklistScreen.kt
         router_path = os.path.join(root_dir, "cloudflare", "src", "controllers", "HttpRouter.js")
@@ -699,6 +713,7 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn("mintWorkerSessionToken", router_js)
         self.assertIn("verifyWorkerSessionToken", router_js)
         self.assertIn("verifyGoogleJwtWithJwks", router_js)
+        self.assertIn("Array.isArray(body.tags)", router_js)
         self.assertIn("active_user_id", checklist_kt)
         self.assertIn("GoogleSignIn", checklist_kt)
         self.assertIn(".getLastSignedInAccount", checklist_kt)

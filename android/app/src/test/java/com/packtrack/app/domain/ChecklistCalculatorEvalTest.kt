@@ -439,6 +439,41 @@ class ChecklistCalculatorEvalTest {
         assertEquals("Nov 10–14", TripDateUtils.formatDateRange("2026-11-10", 4))
         assertEquals("Nov 28 – Dec 3", TripDateUtils.formatDateRange("2026-11-28", 5))
         assertEquals("Dec 29, 2026 – Jan 3, 2027", TripDateUtils.formatDateRange("2026-12-29", 5, "2027-01-03"))
+
+        // 4. Recreate trip config helpers (parseTripTags, buildTagsCsv, computeEndDate, computeDurationDays)
+        val parsedWorkRental = TripDateUtils.parseTripTags("work,rental_car,carry_on")
+        assertTrue(parsedWorkRental.isWork)
+        assertEquals(CarTransportMode.RENTAL_CAR, parsedWorkRental.carMode)
+        assertEquals(LuggageSpace.CARRY_ON, parsedWorkRental.luggageSpace)
+
+        val parsedLeisureNoCar = TripDateUtils.parseTripTags("leisure,no_car,checked_bag,international")
+        assertFalse(parsedLeisureNoCar.isWork)
+        assertEquals(CarTransportMode.NO_CAR, parsedLeisureNoCar.carMode)
+        assertEquals(LuggageSpace.CHECKED_BAG, parsedLeisureNoCar.luggageSpace)
+
+        // Updating only rental car to NO_CAR while keeping work + carry_on intact
+        val updatedCsv = TripDateUtils.buildTagsCsv(
+            isWork = parsedWorkRental.isWork,
+            carMode = CarTransportMode.NO_CAR,
+            luggageSpace = parsedWorkRental.luggageSpace,
+            isInternational = false
+        )
+        assertEquals("work,no_car,carry_on", updatedCsv)
+
+        // Switching to OWN_CAR automatically upgrades luggage space to two_checked_bags
+        val ownCarCsv = TripDateUtils.buildTagsCsv(
+            isWork = false,
+            carMode = CarTransportMode.OWN_CAR,
+            luggageSpace = LuggageSpace.PERSONAL_ONLY,
+            isInternational = false
+        )
+        assertEquals("leisure,own_car,two_checked_bags", ownCarCsv)
+
+        assertEquals(
+            java.time.LocalDate.of(2026, 11, 14),
+            TripDateUtils.computeEndDate("2026-11-10", 4, today)
+        )
+        assertEquals(6, TripDateUtils.computeDurationDays("2026-11-10", "2026-11-16", 3))
     }
 
     @Test
@@ -475,6 +510,7 @@ class ChecklistCalculatorEvalTest {
         val tripChecklistText = java.io.File(uiDir, "TripChecklistScreen.kt").readText()
         assertTrue("TripChecklistScreen must use FlowRow for responsive header badges", tripChecklistText.contains("FlowRow("))
         assertTrue("TripChecklistScreen top bar must display formatted date range alongside duration days", tripChecklistText.contains("formatDateRange("))
+        assertTrue("TripChecklistScreen Recreate dialog must pre-populate and pass editable trip details", tripChecklistText.contains("parseTripTags(") && tripChecklistText.contains("newCarMode = editCarMode"))
         assertTrue("ChecklistScreen must persist active_user_id and restore GoogleSignIn across app restarts", checklistScreenText.contains("active_user_id") && checklistScreenText.contains("getLastSignedInAccount"))
     }
 }

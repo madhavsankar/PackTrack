@@ -1209,13 +1209,21 @@ export class PackingEngineService {
     const cleanStart = /^\d{4}-\d{2}-\d{2}$/.test(String(startDate || "").trim())
       ? String(startDate).trim()
       : new Date().toISOString().slice(0, 10);
+    const daysNum = Number(durationDays) || 3;
+    const cleanEnd = /^\d{4}-\d{2}-\d{2}$/.test(String(endDate || "").trim())
+      ? String(endDate).trim()
+      : (() => {
+          const [y, m, d] = cleanStart.split("-").map(Number);
+          return new Date(Date.UTC(y, m - 1, d + daysNum)).toISOString().slice(0, 10);
+        })();
 
     const fallbackPrefix = usedFallback ? "[FALLBACK] Gemini unavailable — rule-based backup used · " : "";
     return {
       destination: weather.city,
       country: weather.country,
       startDate: cleanStart,
-      durationDays: Number(durationDays) || 3,
+      endDate: cleanEnd,
+      durationDays: daysNum,
       avgHighF: weather.avgHighF,
       avgLowF: weather.avgLowF,
       rainyDaysCount: weather.rainyDaysCount,

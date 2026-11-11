@@ -314,26 +314,56 @@ class GeminiVoiceAssistant(
     /**
      * Recreates a trip's checklist from the user's latest conditional template first,
      * and appends dynamic Gemini weather suggestions at the end (preserving checkmarks on active items).
+     * Accepts optional overrides for dates, duration, purpose, vehicle mode, and luggage space so the user
+     * can edit any aspect of an existing trip while keeping the rest unchanged.
      */
-    suspend fun recreateTripChecklist(tripId: Long): String = withContext(Dispatchers.IO) {
+    suspend fun recreateTripChecklist(
+        tripId: Long,
+        newStartDate: String? = null,
+        newEndDate: String? = null,
+        newDays: Int? = null,
+        newIsWork: Boolean? = null,
+        newCarMode: CarTransportMode? = null,
+        newLuggageSpace: LuggageSpace? = null
+    ): String = withContext(Dispatchers.IO) {
         val trip = dao.getTripById(tripId) ?: return@withContext "Trip not found."
         val cleanUser = FirestoreSyncService.sanitizeUserId(currentUserId)
         FirestoreSyncService.pullFromFirestoreIfNeeded(dao, cleanUser)
 
-        val forecast = OpenMeteoWeatherService.fetchWeather(trip.destination, trip.durationDays, trip.startDate)
-        val tags = trip.tagsCsv.split(",").map { it.trim().lowercase() }
-        val isWork = tags.contains("work")
-        val carMode = when {
-            tags.contains("own_car") || tags.contains("personal_car") -> CarTransportMode.OWN_CAR
-            tags.contains("no_car") -> CarTransportMode.NO_CAR
-            else -> CarTransportMode.RENTAL_CAR
+        val parsedTags = com.packtrack.app.domain.TripDateUtils.parseTripTags(trip.tagsCsv)
+        val effectiveStartDate = newStartDate?.trim()?.takeIf { it.isNotEmpty() } ?: trip.startDate
+        val effectiveDays = (
+            newDays
+                ?: if (!newStartDate.isNullOrBlank() && !newEndDate.isNullOrBlank()) {
+                    com.packtrack.app.domain.TripDateUtils.computeDurationDays(
+                        newStartDate,
+                        newEndDate,
+                        trip.durationDays
+                    )
+                } else {
+                    trip.durationDays
+                }
+            ).coerceIn(1, 30)
+        val isWork = newIsWork ?: parsedTags.isWork
+        val carMode = newCarMode ?: parsedTags.carMode
+        val luggageSpace = if (carMode == CarTransportMode.OWN_CAR) {
+            LuggageSpace.TWO_CHECKED_BAGS
+        } else {
+            newLuggageSpace ?: parsedTags.luggageSpace
         }
-        val luggageSpace = when {
-            tags.contains("two_checked_bags") -> LuggageSpace.TWO_CHECKED_BAGS
-            tags.contains("checked_bag") -> LuggageSpace.CHECKED_BAG
-            tags.contains("personal_only") -> LuggageSpace.PERSONAL_ONLY
-            else -> LuggageSpace.CARRY_ON
-        }
+
+        val forecast = OpenMeteoWeatherService.fetchWeather(
+            trip.destination,
+            effectiveDays,
+            effectiveStartDate,
+            newEndDate
+        )
+        val updatedTagsCsv = com.packtrack.app.domain.TripDateUtils.buildTagsCsv(
+            isWork = isWork,
+            carMode = carMode,
+            luggageSpace = luggageSpace,
+            isInternational = forecast.isInternational
+        )
 
         val existingItems = dao.getItemsForTrip(tripId)
         val existingActiveByLowerName = existingItems
@@ -343,7 +373,7 @@ class GeminiVoiceAssistant(
         val customRules = dao.getTemplateRulesForUser(cleanUser)
         val (rawTemplateItems, suggestedItems, usedFallback) = evaluateTemplateAndSuggestWithGemini(
             tripId = tripId,
-            days = trip.durationDays,
+            days = effectiveDays,
             isWork = isWork,
             carMode = carMode,
             luggageSpace = luggageSpace,
@@ -372,12 +402,14 @@ class GeminiVoiceAssistant(
         } else {
             "Recreated ${trip.destination} checklist with Gemini (${templateItems.size} template items + ${suggestedItems.size} Gemini suggestions)"
         }
-        dao.updateTripWeatherAndDuration(
+        dao.updateTripDetailsAndWeather(
             tripId = tripId,
+            startDate = effectiveStartDate,
+            days = effectiveDays,
+            tagsCsv = updatedTagsCsv,
             highF = forecast.avgHighF,
             lowF = forecast.avgLowF,
             rainDays = forecast.rainyDaysCount,
-            days = trip.durationDays,
             note = summary
         )
         FirestoreSyncService.pushLocalStateToFirestore(dao, cleanUser)

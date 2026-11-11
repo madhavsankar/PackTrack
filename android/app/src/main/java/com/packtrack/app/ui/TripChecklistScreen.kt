@@ -7,8 +7,10 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
@@ -34,9 +36,12 @@ import com.packtrack.app.data.PackTrackDao
 import com.packtrack.app.data.PackingItemEntity
 import com.packtrack.app.data.TemplateRuleEntity
 import com.packtrack.app.domain.BagLocation
+import com.packtrack.app.domain.CarTransportMode
 import com.packtrack.app.domain.ChecklistCalculator
+import com.packtrack.app.domain.LuggageSpace
 import com.packtrack.app.domain.PackingCategory
 import com.packtrack.app.domain.RuleCondition
+import com.packtrack.app.domain.TripDateUtils
 import com.packtrack.app.domain.TripMode
 import kotlinx.coroutines.launch
 
@@ -709,15 +714,271 @@ fun TripChecklistScreen(
     }
 
     if (showRecreateConfirmDialog) {
+        val today = remember { java.time.LocalDate.now() }
+        val initialParsedTags = remember(activeTrip.tagsCsv) {
+            TripDateUtils.parseTripTags(activeTrip.tagsCsv)
+        }
+        val initialStartIso = remember(activeTrip.startDate) {
+            (TripDateUtils.parseStartDate(activeTrip.startDate) ?: today).toString()
+        }
+        val initialEndIso = remember(initialStartIso, activeTrip.durationDays) {
+            TripDateUtils.computeEndDate(initialStartIso, activeTrip.durationDays, today).toString()
+        }
+
+        var editStartDate by remember(activeTrip.id, activeTrip.startDate) { mutableStateOf(initialStartIso) }
+        var editEndDate by remember(activeTrip.id, activeTrip.startDate, activeTrip.durationDays) { mutableStateOf(initialEndIso) }
+        val editDays = remember(editStartDate, editEndDate) {
+            TripDateUtils.computeDurationDays(editStartDate, editEndDate, activeTrip.durationDays)
+        }
+        var editCarMode by remember(activeTrip.id, activeTrip.tagsCsv) { mutableStateOf(initialParsedTags.carMode) }
+        var editLuggageSpace by remember(activeTrip.id, activeTrip.tagsCsv) { mutableStateOf(initialParsedTags.luggageSpace) }
+        var editIsWork by remember(activeTrip.id, activeTrip.tagsCsv) { mutableStateOf(initialParsedTags.isWork) }
+
+        fun openDatePicker(currentIso: String, onPicked: (String) -> Unit) {
+            val initDate = TripDateUtils.parseStartDate(currentIso) ?: today
+            android.app.DatePickerDialog(
+                context,
+                { _, y, m, d ->
+                    onPicked(java.time.LocalDate.of(y, m + 1, d).toString())
+                },
+                initDate.year,
+                initDate.monthValue - 1,
+                initDate.dayOfMonth
+            ).show()
+        }
+
         AlertDialog(
             onDismissRequest = { showRecreateConfirmDialog = false },
             containerColor = MaterialTheme.colorScheme.surface,
-            title = { Text("Recreate Checklist?") },
+            title = { Text("Recreate ${activeTrip.destination} Checklist") },
             text = {
-                Text(
-                    "You do realize that recreating this checklist from your latest template and weather could delete manually added items?",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Review or edit any trip detail below. Everything else stays the same, and your checked items will be preserved (manually added items not in your template may be removed).",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    // 1. Travel Dates
+                    Text(
+                        text = "TRAVEL DATES (${TripDateUtils.formatDateRange(editStartDate, editDays, editEndDate)} · ${editDays}d)",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            onClick = {
+                                openDatePicker(editStartDate) { pickedStart ->
+                                    editStartDate = pickedStart
+                                    val s = TripDateUtils.parseStartDate(pickedStart) ?: today
+                                    val e = TripDateUtils.parseStartDate(editEndDate) ?: s.plusDays(editDays.toLong())
+                                    if (!e.isAfter(s)) {
+                                        editEndDate = s.plusDays(maxOf(1, activeTrip.durationDays).toLong()).toString()
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                Text(
+                                    text = "Start Date",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = editStartDate,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        Surface(
+                            onClick = {
+                                openDatePicker(editEndDate) { pickedEnd ->
+                                    val s = TripDateUtils.parseStartDate(editStartDate) ?: today
+                                    val e = TripDateUtils.parseStartDate(pickedEnd) ?: s.plusDays(1)
+                                    editEndDate = if (e.isAfter(s)) pickedEnd else s.plusDays(1).toString()
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                Text(
+                                    text = "End Date (${editDays}d)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = editEndDate,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+
+                    // 2. Transport & Rental Car
+                    Text(
+                        text = "TRANSPORT & RENTAL CAR",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        val carOptions = listOf(
+                            CarTransportMode.RENTAL_CAR to "Flight + Rental Car",
+                            CarTransportMode.NO_CAR to "Flight (No Rental Car)",
+                            CarTransportMode.OWN_CAR to "Personal Car (Driving Own Vehicle)"
+                        )
+                        carOptions.forEach { (mode, label) ->
+                            val selected = editCarMode == mode
+                            Surface(
+                                onClick = {
+                                    editCarMode = mode
+                                    if (mode == CarTransportMode.OWN_CAR) {
+                                        editLuggageSpace = LuggageSpace.TWO_CHECKED_BAGS
+                                    }
+                                },
+                                shape = RoundedCornerShape(9.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        color = if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                    if (selected) {
+                                        Text(
+                                            text = "✓",
+                                            style = MaterialTheme.typography.labelMedium,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 3. Bags / Luggage (shown when flying)
+                    if (editCarMode != CarTransportMode.OWN_CAR) {
+                        Text(
+                            text = "LUGGAGE / BAGS",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                        val bagOptions = listOf(
+                            LuggageSpace.CARRY_ON to "Carry-On + Shoulder",
+                            LuggageSpace.CHECKED_BAG to "1 Check-In + Carry-On",
+                            LuggageSpace.TWO_CHECKED_BAGS to "2 Check-In + Carry-On",
+                            LuggageSpace.PERSONAL_ONLY to "Shoulder Bag Only"
+                        )
+                        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                            bagOptions.chunked(2).forEach { rowPair ->
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
+                                    rowPair.forEach { (bag, shortLabel) ->
+                                        val selected = editLuggageSpace == bag
+                                        Surface(
+                                            onClick = { editLuggageSpace = bag },
+                                            shape = RoundedCornerShape(9.dp),
+                                            color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                            else MaterialTheme.colorScheme.surfaceVariant,
+                                            border = BorderStroke(
+                                                1.dp,
+                                                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                            ),
+                                            modifier = Modifier.weight(1f)
+                                        ) {
+                                            Box(
+                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 8.dp),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = shortLabel,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onSurface,
+                                                    maxLines = 1,
+                                                    overflow = TextOverflow.Ellipsis
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // 4. Trip Purpose (Work vs Personal)
+                    Text(
+                        text = "TRIP PURPOSE",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        val purposeOptions = listOf(
+                            true to "Work Trip",
+                            false to "Personal / Leisure"
+                        )
+                        purposeOptions.forEach { (workVal, label) ->
+                            val selected = editIsWork == workVal
+                            Surface(
+                                onClick = { editIsWork = workVal },
+                                shape = RoundedCornerShape(9.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(vertical = 9.dp, horizontal = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             },
             confirmButton = {
                 Button(
@@ -725,7 +986,15 @@ fun TripChecklistScreen(
                         showRecreateConfirmDialog = false
                         isRefreshingWeather = true
                         scope.launch {
-                            val summary = voiceAssistant.recreateTripChecklist(tripId)
+                            val summary = voiceAssistant.recreateTripChecklist(
+                                tripId = tripId,
+                                newStartDate = editStartDate,
+                                newEndDate = editEndDate,
+                                newDays = editDays,
+                                newIsWork = editIsWork,
+                                newCarMode = editCarMode,
+                                newLuggageSpace = editLuggageSpace
+                            )
                             isRefreshingWeather = false
                             Toast.makeText(context, summary, Toast.LENGTH_SHORT).show()
                         }

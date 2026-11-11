@@ -246,4 +246,76 @@ object TripDateUtils {
         val diff = daysUntilStart(rawStartDate, today) ?: 0L
         return if (diff >= 0L) diff else 1_000_000L + (-diff)
     }
+
+    fun computeEndDate(
+        rawStartDate: String?,
+        durationDays: Int,
+        fallbackToday: java.time.LocalDate = java.time.LocalDate.now()
+    ): java.time.LocalDate {
+        val start = parseStartDate(rawStartDate) ?: fallbackToday
+        return start.plusDays(maxOf(1, durationDays).toLong())
+    }
+
+    fun computeDurationDays(
+        rawStartDate: String?,
+        rawEndDate: String?,
+        fallbackDays: Int = 3
+    ): Int {
+        val start = parseStartDate(rawStartDate)
+        val end = parseStartDate(rawEndDate)
+        if (start != null && end != null) {
+            val diff = java.time.temporal.ChronoUnit.DAYS.between(start, end).toInt()
+            return diff.coerceIn(1, 30)
+        }
+        return fallbackDays.coerceIn(1, 30)
+    }
+
+    data class ParsedTripTags(
+        val isWork: Boolean,
+        val carMode: CarTransportMode,
+        val luggageSpace: LuggageSpace
+    )
+
+    fun parseTripTags(tagsCsv: String?): ParsedTripTags {
+        val tags = (tagsCsv ?: "")
+            .split(",")
+            .map { it.trim().lowercase() }
+            .filter { it.isNotEmpty() }
+        val isWork = if (tags.contains("leisure") && !tags.contains("work")) false else true
+        val carMode = when {
+            tags.contains("own_car") || tags.contains("personal_car") -> CarTransportMode.OWN_CAR
+            tags.contains("no_car") -> CarTransportMode.NO_CAR
+            else -> CarTransportMode.RENTAL_CAR
+        }
+        val luggageSpace = when {
+            tags.contains("two_checked_bags") -> LuggageSpace.TWO_CHECKED_BAGS
+            tags.contains("checked_bag") -> LuggageSpace.CHECKED_BAG
+            tags.contains("personal_only") -> LuggageSpace.PERSONAL_ONLY
+            else -> LuggageSpace.CARRY_ON
+        }
+        return ParsedTripTags(
+            isWork = isWork,
+            carMode = carMode,
+            luggageSpace = luggageSpace
+        )
+    }
+
+    fun buildTagsCsv(
+        isWork: Boolean,
+        carMode: CarTransportMode,
+        luggageSpace: LuggageSpace,
+        isInternational: Boolean = false
+    ): String {
+        val effectiveLuggage = if (carMode == CarTransportMode.OWN_CAR) {
+            LuggageSpace.TWO_CHECKED_BAGS
+        } else {
+            luggageSpace
+        }
+        return listOfNotNull(
+            if (isWork) "work" else "leisure",
+            carMode.tag,
+            effectiveLuggage.tag,
+            if (isInternational) "international" else null
+        ).joinToString(",")
+    }
 }

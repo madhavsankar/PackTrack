@@ -504,11 +504,72 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
   <!-- MODAL: CONFIRM RECREATE TRIP CHECKLIST                    -->
   <!-- ========================================================= -->
   <div id="recreate-trip-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-    <div class="surface-card rounded-2xl p-5 w-full max-w-sm space-y-3">
-      <h3 class="text-sm font-bold text-white">Recreate Checklist?</h3>
+    <div class="surface-card rounded-2xl p-5 w-full max-w-md space-y-3.5">
+      <div class="flex items-center justify-between">
+        <h3 id="rt-modal-title" class="text-sm font-bold text-white">Recreate Checklist?</h3>
+        <button type="button" onclick="app.closeModals()" class="text-slate-400 hover:text-white text-xs">✕</button>
+      </div>
       <p class="text-xs text-slate-300">
-        You do realize that recreating this checklist from your latest template and weather could delete manually added items?
+        Review or edit any trip detail below — everything else remains the same, and your checked items will stay checked (manually added items not in your template may be removed).
       </p>
+      <div class="space-y-3">
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-[11px] font-semibold text-slate-400 uppercase">Start Date</label>
+            <input
+              id="rt-start-date"
+              type="date"
+              onchange="app.onRecreateDateChange()"
+              class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs"
+            />
+          </div>
+          <div>
+            <label id="rt-days-label" class="text-[11px] font-semibold text-slate-400 uppercase">End Date</label>
+            <input
+              id="rt-end-date"
+              type="date"
+              onchange="app.onRecreateDateChange()"
+              class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs"
+            />
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-[11px] font-semibold text-slate-400 uppercase">Vehicle & Rental Car</label>
+            <select
+              id="rt-car"
+              onchange="app.onRecreateCarChange()"
+              class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs"
+            >
+              <option value="rental_car">Flight + Rental Car</option>
+              <option value="no_car">Flight (No Rental Car)</option>
+              <option value="own_car">Personal Car (Driving Own)</option>
+            </select>
+          </div>
+          <div>
+            <label class="text-[11px] font-semibold text-slate-400 uppercase">Trip Purpose</label>
+            <select
+              id="rt-purpose"
+              class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs"
+            >
+              <option value="work">Work / Business</option>
+              <option value="leisure">Leisure / Personal</option>
+            </select>
+          </div>
+        </div>
+        <div id="rt-luggage-box">
+          <label class="text-[11px] font-semibold text-slate-400 uppercase">Luggage / Bags</label>
+          <select
+            id="rt-luggage"
+            class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs"
+          >
+            <option value="carry_on">Carry-On + Shoulder Bag</option>
+            <option value="checked_bag">1 Check-In Bag + Carry-On</option>
+            <option value="two_checked_bags">2 Check-In Bags + Carry-On</option>
+            <option value="personal_only">Shoulder Bag Only</option>
+          </select>
+        </div>
+      </div>
       <div class="flex justify-end gap-2 pt-2">
         <button type="button" onclick="app.closeModals()" class="surface-subtle px-3.5 py-2 rounded-xl text-xs text-slate-300">Cancel</button>
         <button type="button" id="rt-submit-btn" onclick="app.confirmRecreateTrip()" class="accent-bg px-4 py-2 rounded-xl text-xs font-semibold transition">Recreate</button>
@@ -622,7 +683,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
 
       closeActiveModals() {
         let closedAny = false;
-        for (const id of ["add-item-modal", "add-rule-modal"]) {
+        for (const id of ["add-item-modal", "add-rule-modal", "recreate-trip-modal", "delete-trip-modal", "delete-rule-modal", "new-trip-modal"]) {
           const el = document.getElementById(id);
           if (el && !el.classList.contains("hidden")) {
             el.classList.add("hidden");
@@ -1340,7 +1401,90 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
 
       openRecreateTripModal() {
         if (this.activeTripIdx === null || !this.state.trips?.[this.activeTripIdx]) return;
+        const trip = this.state.trips[this.activeTripIdx];
+        const todayIso = new Date().toISOString().slice(0, 10);
+        const rawStart = String(trip.startDate || "").trim().slice(0, 10);
+        const startIso = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : todayIso;
+        const curDays = Math.max(1, Math.min(30, Number(trip.durationDays) || 3));
+        const rawEnd = String(trip.endDate || "").trim().slice(0, 10);
+        const endIso =
+          /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) && rawEnd > startIso
+            ? rawEnd
+            : this.addDaysIso(startIso, curDays);
+
+        const tags = String(trip.tagsCsv || "work,rental_car,carry_on")
+          .split(",")
+          .map((t) => t.trim().toLowerCase())
+          .filter(Boolean);
+        const purpose = tags.includes("leisure") && !tags.includes("work") ? "leisure" : "work";
+        const carMode =
+          tags.includes("own_car") || tags.includes("personal_car")
+            ? "own_car"
+            : tags.includes("no_car")
+            ? "no_car"
+            : "rental_car";
+        const luggage = tags.includes("two_checked_bags")
+          ? "two_checked_bags"
+          : tags.includes("checked_bag")
+          ? "checked_bag"
+          : tags.includes("personal_only")
+          ? "personal_only"
+          : "carry_on";
+
+        const titleEl = document.getElementById("rt-modal-title");
+        if (titleEl) titleEl.textContent = \`Recreate \${trip.destination || "Trip"} Checklist\`;
+
+        const sEl = document.getElementById("rt-start-date");
+        const eEl = document.getElementById("rt-end-date");
+        if (sEl) sEl.value = startIso;
+        if (eEl) {
+          eEl.min = startIso;
+          eEl.value = endIso;
+        }
+        const daysLabel = document.getElementById("rt-days-label");
+        const calcDays = this.calcDaysBetween(startIso, endIso);
+        if (daysLabel) daysLabel.textContent = \`End Date (\${calcDays}d)\`;
+
+        const carEl = document.getElementById("rt-car");
+        if (carEl) carEl.value = carMode;
+
+        const purpEl = document.getElementById("rt-purpose");
+        if (purpEl) purpEl.value = purpose;
+
+        const lugEl = document.getElementById("rt-luggage");
+        if (lugEl) lugEl.value = luggage;
+
+        this.onRecreateCarChange();
         document.getElementById("recreate-trip-modal").classList.remove("hidden");
+      }
+
+      onRecreateDateChange() {
+        const sEl = document.getElementById("rt-start-date");
+        const eEl = document.getElementById("rt-end-date");
+        if (!sEl || !eEl) return;
+        const startIso = sEl.value || new Date().toISOString().slice(0, 10);
+        eEl.min = startIso;
+        if (!eEl.value || eEl.value <= startIso) {
+          const trip = this.state.trips?.[this.activeTripIdx];
+          const fallbackDays = Math.max(1, Number(trip?.durationDays) || 3);
+          eEl.value = this.addDaysIso(startIso, fallbackDays);
+        }
+        const days = this.calcDaysBetween(startIso, eEl.value);
+        const daysLabel = document.getElementById("rt-days-label");
+        if (daysLabel) daysLabel.textContent = \`End Date (\${days}d)\`;
+      }
+
+      onRecreateCarChange() {
+        const carEl = document.getElementById("rt-car");
+        const lugBox = document.getElementById("rt-luggage-box");
+        const lugEl = document.getElementById("rt-luggage");
+        if (!carEl || !lugBox) return;
+        if (carEl.value === "own_car") {
+          if (lugEl) lugEl.value = "two_checked_bags";
+          lugBox.classList.add("hidden");
+        } else {
+          lugBox.classList.remove("hidden");
+        }
       }
 
       async confirmRecreateTrip() {
@@ -1351,11 +1495,30 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           btn.disabled = true;
         }
         try {
+          const sEl = document.getElementById("rt-start-date");
+          const eEl = document.getElementById("rt-end-date");
+          const carEl = document.getElementById("rt-car");
+          const purpEl = document.getElementById("rt-purpose");
+          const lugEl = document.getElementById("rt-luggage");
+
+          const startDate = sEl?.value || "";
+          const endDate = eEl?.value || "";
+          const durationDays =
+            startDate && endDate ? this.calcDaysBetween(startDate, endDate) : undefined;
+          const carMode = carEl?.value || "rental_car";
+          const purpose = purpEl?.value || "work";
+          const luggage =
+            carMode === "own_car" ? "two_checked_bags" : lugEl?.value || "carry_on";
+
           const resp = await fetch("/api/trips/recreate", {
             method: "POST",
             headers: this.getHeaders(),
             body: JSON.stringify({
               tripIndex: this.activeTripIdx,
+              startDate,
+              endDate,
+              durationDays,
+              tags: [purpose, carMode, luggage],
               geminiApiKey: localStorage.getItem("packtrack_gemini_key") || "",
             }),
           });

@@ -133,6 +133,21 @@ interface PackTrackDao {
         note: String
     )
 
+    @Query(
+        "UPDATE trips SET startDate = :startDate, durationDays = :days, tagsCsv = :tagsCsv, " +
+            "avgHighF = :highF, avgLowF = :lowF, rainyDaysCount = :rainDays, lastAgentNote = :note WHERE id = :tripId"
+    )
+    suspend fun updateTripDetailsAndWeather(
+        tripId: Long,
+        startDate: String,
+        days: Int,
+        tagsCsv: String,
+        highF: Double,
+        lowF: Double,
+        rainDays: Int,
+        note: String
+    )
+
     @Query("UPDATE trips SET lastInteractionId = :interactionId, lastAgentNote = :note WHERE id = :tripId")
     suspend fun updateTripConversation(tripId: Long, interactionId: String?, note: String)
 

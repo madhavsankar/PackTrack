@@ -456,14 +456,21 @@ export class HttpRouter {
             prevMap.set(String(it.name || "").trim().toLowerCase(), it);
           }
         }
-        const tags = String(existing.tagsCsv || "work,rental_car,carry_on")
-          .split(",")
-          .map((t) => t.trim())
-          .filter(Boolean);
+        const tags =
+          Array.isArray(body.tags) && body.tags.length > 0
+            ? body.tags.map((t) => String(t).trim()).filter(Boolean)
+            : String(existing.tagsCsv || "work,rental_car,carry_on")
+                .split(",")
+                .map((t) => t.trim())
+                .filter(Boolean);
+        const startDate = String(body.startDate || existing.startDate || "").trim();
+        const endDate = String(body.endDate || existing.endDate || "").trim();
+        const durationDays = Number(body.durationDays) || Number(existing.durationDays) || 3;
         const recreated = await PackingEngineService.createTripObject({
           destination: existing.destination || "Atlanta",
-          durationDays: existing.durationDays || 3,
-          startDate: existing.startDate || "",
+          durationDays,
+          startDate,
+          endDate,
           tags,
           customRules: state.custom_rules,
           geminiApiKey: body.geminiApiKey || this.env?.GEMINI_API_KEY || "",
