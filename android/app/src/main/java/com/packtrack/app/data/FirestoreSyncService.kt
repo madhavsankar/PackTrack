@@ -26,6 +26,13 @@ object FirestoreSyncService {
     private val firebaseProjectId: String
         get() = BuildConfig.FIREBASE_PROJECT_ID.trim()
 
+    @Volatile
+    private var lastLocalMutationMs: Long = 0L
+
+    fun markLocalMutation() {
+        lastLocalMutationMs = System.currentTimeMillis()
+    }
+
     /**
      * Normalizes a username or email to a clean username ID (strips `@domain` or `_gmail.com`).
      */
@@ -94,8 +101,9 @@ object FirestoreSyncService {
         dao: PackTrackDao,
         userId: String = TravelerTemplateCatalog.DEFAULT_USER_ID,
         trips: List<TripEntity>? = null
-    ): Boolean = withContext(Dispatchers.IO) {
+    ): Boolean = withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
         try {
+            markLocalMutation()
             val cleanUser = sanitizeUserId(userId)
             val docUrl = docUrlForUser(cleanUser) ?: return@withContext false
             val userTrips = trips ?: dao.getTripsForUser(cleanUser)
@@ -257,19 +265,27 @@ object FirestoreSyncService {
 
             // 2. Merge or update Cloud Trips for this user
             val localTrips = currentLocalTrips ?: dao.getTripsForUser(cleanUser)
-            val localTripByKey = localTrips.associateBy { "${it.destination.lowercase()}_${it.durationDays}" }.toMutableMap()
+            val unclaimedLocalTrips = localTrips.toMutableList()
+            val recentlyMutatedLocally = (System.currentTimeMillis() - lastLocalMutationMs) < 20_000L
             val tripsArr = payload.optJSONArray("trips") ?: JSONArray()
             for (i in 0 until tripsArr.length()) {
                 val t = tripsArr.getJSONObject(i)
                 val dest = t.optString("destination", "")
                 val days = t.optInt("durationDays", 5)
-                val key = "${dest.lowercase()}_$days"
                 if (dest.isBlank()) continue
 
-                val existingTrip = localTripByKey[key]
+                val existingTrip = unclaimedLocalTrips.firstOrNull {
+                    it.destination.equals(dest, ignoreCase = true) && it.durationDays == days
+                } ?: unclaimedLocalTrips.firstOrNull {
+                    it.destination.equals(dest, ignoreCase = true)
+                }
+                if (existingTrip != null) {
+                    unclaimedLocalTrips.remove(existingTrip)
+                }
                 val itemsArr = t.optJSONArray("items") ?: JSONArray()
 
                 if (existingTrip == null) {
+                    if (recentlyMutatedLocally) continue
                     val newTripId = dao.insertTrip(
                         TripEntity(
                             userId = cleanUser,
@@ -309,11 +325,12 @@ object FirestoreSyncService {
                     }
                 } else {
                     val cloudStart = t.optString("startDate", "")
-                    if (cloudStart.isNotBlank() && cloudStart != existingTrip.startDate) {
+                    val localNeedsStart = existingTrip.startDate.isBlank() || existingTrip.startDate == "Saved Trip"
+                    if (cloudStart.isNotBlank() && cloudStart != existingTrip.startDate && (localNeedsStart || !recentlyMutatedLocally)) {
                         dao.updateTripStartDate(existingTrip.id, cloudStart)
                     }
                     val cloudMode = t.optString("tripMode", existingTrip.tripMode)
-                    if (cloudMode != existingTrip.tripMode) {
+                    if (cloudMode != existingTrip.tripMode && !recentlyMutatedLocally) {
                         dao.updateTripMode(existingTrip.id, cloudMode)
                     }
                     val localItems = dao.getItemsForTrip(existingTrip.id)

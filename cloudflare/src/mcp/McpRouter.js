@@ -64,8 +64,9 @@ export const MCP_TOOLS = [
 ];
 
 export class McpRouter {
-  constructor(repo) {
+  constructor(repo, env = null) {
     this.repo = repo;
+    this.env = env;
   }
 
   async handle(request, defaultUser = "default") {
@@ -107,6 +108,7 @@ export class McpRouter {
           durationDays: args.duration_days || 5,
           tags: args.tags || ["work", "rental_car", "carry_on"],
           customRules: state.custom_rules,
+          geminiApiKey: this.env?.GEMINI_API_KEY || "",
         });
         state.trips.unshift(trip);
         await this.repo.saveUserState(userId, state);

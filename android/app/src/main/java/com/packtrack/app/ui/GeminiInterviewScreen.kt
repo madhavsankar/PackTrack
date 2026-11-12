@@ -188,7 +188,7 @@ fun GeminiInterviewScreen(
                 }
 
                 InterviewStep.FLIGHT_OR_CAR -> {
-                    val isPersonalCar = lower.contains("own") || lower.contains("personal") || lower.contains("car") && !lower.contains("flight")
+                    val isPersonalCar = lower.contains("own") || lower.contains("personal") || (lower.contains("car") && !lower.contains("flight") && !lower.contains("rental") && !lower.contains("no "))
                     if (isPersonalCar) {
                         carMode = CarTransportMode.OWN_CAR
                         luggageSpace = LuggageSpace.TWO_CHECKED_BAGS
@@ -315,6 +315,9 @@ fun GeminiInterviewScreen(
 
     BackHandler(enabled = !isBusy) {
         handleStepBack()
+    }
+    BackHandler(enabled = isBusy) {
+        // Prevent accidental back navigation while Gemini is generating the checklist
     }
 
     Scaffold(
@@ -555,6 +558,8 @@ fun GeminiInterviewScreen(
                                             val e = TripDateUtils.parseStartDate(endDate) ?: s.plusDays(4)
                                             if (!e.isAfter(s)) {
                                                 endDate = s.plusDays(4).toString()
+                                            } else if (java.time.temporal.ChronoUnit.DAYS.between(s, e) > 30) {
+                                                endDate = s.plusDays(30).toString()
                                             }
                                         }
                                     },
@@ -586,7 +591,13 @@ fun GeminiInterviewScreen(
                                 Surface(
                                     onClick = {
                                         openAndroidDatePicker(endDate) { picked ->
-                                            endDate = picked
+                                            val s = TripDateUtils.parseStartDate(startDate) ?: today
+                                            val e = TripDateUtils.parseStartDate(picked) ?: s.plusDays(1)
+                                            endDate = when {
+                                                !e.isAfter(s) -> s.plusDays(1).toString()
+                                                java.time.temporal.ChronoUnit.DAYS.between(s, e) > 30 -> s.plusDays(30).toString()
+                                                else -> picked
+                                            }
                                         }
                                     },
                                     shape = MaterialTheme.shapes.medium,

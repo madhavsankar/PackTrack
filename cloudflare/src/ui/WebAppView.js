@@ -534,6 +534,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         <label class="text-[11px] font-semibold text-slate-400 uppercase">Scale per day</label>
         <select id="ar-scale-select" class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs">
           <option value="fixed">Fixed (1 total for trip)</option>
+          <option value="0.35">0.35 per day (1 per 3 days)</option>
           <option value="0.5">0.5 per day</option>
           <option value="1">1 per day</option>
           <option value="2">2 per day</option>
@@ -1005,14 +1006,24 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       formatTempRange(lowF = 52, highF = 68) {
-        const lF = Number(lowF) || 52;
-        const hF = Number(highF) || 68;
+        const parsedL = Number(lowF);
+        const parsedH = Number(highF);
+        const lF = Number.isFinite(parsedL) && lowF !== null && lowF !== "" ? parsedL : 52;
+        const hF = Number.isFinite(parsedH) && highF !== null && highF !== "" ? parsedH : 68;
         if (this.tempUnit === "C") {
           const lC = Math.round(((lF - 32) * 5) / 9);
           const hC = Math.round(((hF - 32) * 5) / 9);
           return \`\${lC}°–\${hC}°C\`;
         }
         return \`\${Math.round(lF)}°–\${Math.round(hF)}°F\`;
+      }
+
+      getLocalTodayIso() {
+        const now = new Date();
+        const y = now.getFullYear();
+        const m = String(now.getMonth() + 1).padStart(2, "0");
+        const d = String(now.getDate()).padStart(2, "0");
+        return \`\${y}-\${m}-\${d}\`;
       }
 
       daysUntilStart(rawStartDate) {
@@ -1098,7 +1109,8 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       setAccentHue(hueVal) {
-        const h = Math.max(0, Math.min(360, Number(hueVal) || 160));
+        const parsed = Number(hueVal);
+        const h = Math.max(0, Math.min(360, Number.isFinite(parsed) && String(hueVal).trim() !== "" ? parsed : 160));
         this.accentHue = h;
         document.documentElement.style.setProperty("--accent", \`hsl(\${h}, 82%, 46%)\`);
         document.documentElement.style.setProperty("--accent-soft", \`hsla(\${h}, 82%, 46%, 0.14)\`);
@@ -1175,6 +1187,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       async loadState(manual = false) {
+        if (!manual && this._isMutatingTrip) return;
         if (manual) {
           document.getElementById("drawer-sync-status").textContent = "Syncing...";
         }
@@ -1209,13 +1222,17 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       async pushState() {
         this.render();
         if (!this.googleIdToken) return;
-        try {
-          await fetch("/api/state", {
-            method: "POST",
-            headers: this.getHeaders(),
-            body: JSON.stringify(this.state),
-          });
-        } catch (_) {}
+        const reqPromise = (async () => {
+          try {
+            await fetch("/api/state", {
+              method: "POST",
+              headers: this.getHeaders(),
+              body: JSON.stringify(this.state),
+            });
+          } catch (_) {}
+        })();
+        this._lastPushPromise = reqPromise;
+        return reqPromise;
       }
 
       getAllCategories() {
@@ -1302,8 +1319,8 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       openNewTripModal() {
-        const todayIso = new Date().toISOString().slice(0, 10);
-        const endIso = new Date(Date.now() + 4 * 86400000).toISOString().slice(0, 10);
+        const todayIso = this.getLocalTodayIso();
+        const endIso = this.addDaysIso(todayIso, 4);
         this.iv = {
           step: "DESTINATION",
           destination: "",
@@ -1348,8 +1365,11 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         const eEl = document.getElementById("iv-end-date");
         if (!sEl || !eEl) return;
         this.iv.startDate = sEl.value || this.iv.startDate;
+        const maxEndIso = this.addDaysIso(this.iv.startDate, 30);
         if (!eEl.value || eEl.value <= this.iv.startDate) {
           this.iv.endDate = this.addDaysIso(this.iv.startDate, 4);
+        } else if (eEl.value > maxEndIso) {
+          this.iv.endDate = maxEndIso;
         } else {
           this.iv.endDate = eEl.value;
         }
@@ -1543,7 +1563,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         } else {
           const r = Number(rule.ratioPerDay) || 1;
           document.getElementById("ar-scale-select").value =
-            r <= 0.6 ? "0.5" : r >= 2.5 ? "3" : r >= 1.5 ? "2" : "1";
+            r <= 0.4 ? "0.35" : r <= 0.6 ? "0.5" : r >= 2.5 ? "3" : r >= 1.5 ? "2" : "1";
         }
         document.getElementById("add-rule-modal").classList.remove("hidden");
       }
@@ -1563,7 +1583,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       openRecreateTripModal() {
         if (this.activeTripIdx === null || !this.state.trips?.[this.activeTripIdx]) return;
         const trip = this.state.trips[this.activeTripIdx];
-        const todayIso = new Date().toISOString().slice(0, 10);
+        const todayIso = this.getLocalTodayIso();
         const rawStart = String(trip.startDate || "").trim().slice(0, 10);
         const startIso = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : todayIso;
         const curDays = Math.max(1, Math.min(30, Number(trip.durationDays) || 3));
@@ -1616,6 +1636,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         if (lugEl) lugEl.value = luggage;
 
         this.onRecreateCarChange();
+        this.pushHistoryState("recreate-trip-modal");
         document.getElementById("recreate-trip-modal").classList.remove("hidden");
       }
 
@@ -1623,12 +1644,15 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         const sEl = document.getElementById("rt-start-date");
         const eEl = document.getElementById("rt-end-date");
         if (!sEl || !eEl) return;
-        const startIso = sEl.value || new Date().toISOString().slice(0, 10);
+        const startIso = sEl.value || this.getLocalTodayIso();
+        const maxEndIso = this.addDaysIso(startIso, 30);
         eEl.min = startIso;
         if (!eEl.value || eEl.value <= startIso) {
           const trip = this.state.trips?.[this.activeTripIdx];
-          const fallbackDays = Math.max(1, Number(trip?.durationDays) || 3);
+          const fallbackDays = Math.max(1, Math.min(30, Number(trip?.durationDays) || 3));
           eEl.value = this.addDaysIso(startIso, fallbackDays);
+        } else if (eEl.value > maxEndIso) {
+          eEl.value = maxEndIso;
         }
         const days = this.calcDaysBetween(startIso, eEl.value);
         const daysLabel = document.getElementById("rt-days-label");
@@ -1655,6 +1679,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           btn.textContent = "Recreating...";
           btn.disabled = true;
         }
+        this._isMutatingTrip = true;
         try {
           const sEl = document.getElementById("rt-start-date");
           const eEl = document.getElementById("rt-end-date");
@@ -1672,11 +1697,22 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             carMode === "own_car" ? "two_checked_bags" : lugEl?.value || "carry_on";
 
           const currentTrip = this.state.trips?.[this.activeTripIdx];
+          if (currentTrip) {
+            if (startDate) currentTrip.startDate = startDate;
+            if (endDate) currentTrip.endDate = endDate;
+            if (durationDays) currentTrip.durationDays = durationDays;
+            currentTrip.tagsCsv = [purpose, carMode, luggage].join(",");
+            this.render();
+          }
+          if (this._lastPushPromise) {
+            await Promise.race([this._lastPushPromise, new Promise((r) => setTimeout(r, 1500))]);
+          }
           const resp = await fetch("/api/trips/recreate", {
             method: "POST",
             headers: this.getHeaders(),
             body: JSON.stringify({
               tripIndex: this.activeTripIdx,
+              destination: currentTrip?.destination || "",
               startDate,
               endDate,
               durationDays,
@@ -1688,6 +1724,11 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           });
           if (resp.ok) {
             this.state = await resp.json();
+            if (startDate && this.state.trips?.[this.activeTripIdx]) {
+              this.state.trips[this.activeTripIdx].startDate = startDate;
+              if (endDate) this.state.trips[this.activeTripIdx].endDate = endDate;
+              if (durationDays) this.state.trips[this.activeTripIdx].durationDays = durationDays;
+            }
             this.closeModals();
             this.render();
             this.showToast("✓ Checklist recreated (checked items preserved)");
@@ -1697,6 +1738,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         } catch (_) {
           this.showToast("Network error while recreating checklist");
         } finally {
+          this._isMutatingTrip = false;
           if (btn) {
             btn.textContent = "Recreate";
             btn.disabled = false;
@@ -1756,6 +1798,8 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         if (this.currentScreen === "trip" && this.activeTripIdx === idx) {
           this.currentScreen = "home";
           this.activeTripIdx = null;
+        } else if (this.activeTripIdx !== null && idx < this.activeTripIdx) {
+          this.activeTripIdx -= 1;
         }
         this.pendingDeleteTripIdx = null;
         this.closeModals();
@@ -1858,16 +1902,19 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         });
 
         if (saveTemplate) {
-          this.state.custom_rules.push({
-            moduleKey: "Always",
-            name,
-            category,
-            scaleByDays: false,
-            ratioPerDay: 1.0,
-            isDoorwayCritical,
-            isHighLossReturn: true,
-            bagLocation,
-          });
+          const exists = this.state.custom_rules.some((r) => r.name.toLowerCase() === name.toLowerCase());
+          if (!exists) {
+            this.state.custom_rules.push({
+              moduleKey: "Always",
+              name,
+              category,
+              scaleByDays: false,
+              ratioPerDay: 1.0,
+              isDoorwayCritical,
+              isHighLossReturn: true,
+              bagLocation,
+            });
+          }
         }
 
         this.closeModals();
@@ -1888,7 +1935,16 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         const scaleVal = document.getElementById("ar-scale-select").value;
         const scaleByDays = scaleVal !== "fixed";
         const ratioPerDay = scaleByDays ? (parseFloat(scaleVal) || 1.0) : 1.0;
-        const isDoorwayCritical = category === "On Me" || category === "Docs";
+        const existingRule =
+          this.editingRuleIdx !== null ? this.state.custom_rules[this.editingRuleIdx] : null;
+        const isDoorwayCritical =
+          category === "On Me" ||
+          category === "Docs" ||
+          Boolean(existingRule?.isDoorwayCritical);
+        const isHighLossReturn =
+          existingRule && typeof existingRule.isHighLossReturn === "boolean"
+            ? existingRule.isHighLossReturn
+            : true;
 
         const updatedRule = {
           moduleKey,
@@ -1897,7 +1953,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           scaleByDays,
           ratioPerDay,
           isDoorwayCritical,
-          isHighLossReturn: true,
+          isHighLossReturn,
           bagLocation,
         };
 
@@ -2067,7 +2123,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         } else if (iv.step === "EXACT_DATES") {
           titleEl.textContent = \`What are your exact travel dates for \${iv.destination}?\`;
           subEl.textContent = "Select your Start and End dates so we can fetch the weather forecast for your exact travel dates.";
-          const todayIso = new Date().toISOString().slice(0, 10);
+          const todayIso = this.getLocalTodayIso();
           const datePresets = [
             { label: "Today → +3d", s: todayIso, e: this.addDaysIso(todayIso, 3) },
             { label: "Tomorrow → +4d", s: this.addDaysIso(todayIso, 1), e: this.addDaysIso(todayIso, 5) },

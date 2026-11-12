@@ -691,7 +691,7 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn("FlowRow(", trip_kt)
         self.assertIn("formatDateRange(", trip_kt)
         self.assertIn("parseTripTags(", trip_kt)
-        self.assertIn("newCarMode = editCarMode", trip_kt)
+        self.assertIn("newCarMode = chosenCarMode", trip_kt)
 
         # Verify Recreate Trip modal pre-populates current details and sends overrides in WebAppView.js & HttpRouter.js
         webapp_path = os.path.join(root_dir, "cloudflare", "src", "ui", "WebAppView.js")
@@ -722,6 +722,26 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn("active_user_id", checklist_kt)
         self.assertIn("GoogleSignIn", checklist_kt)
         self.assertIn(".getLastSignedInAccount", checklist_kt)
+
+        # Verify QA Subagent 4 & 5 audit fixes across WebAppView.js, PackingEngineService.js, McpRouter.js, and Android UI
+        self.assertIn('<option value="0.35">0.35 per day (1 per 3 days)</option>', webapp_js)
+        self.assertIn("getLocalTodayIso()", webapp_js)
+        self.assertIn("Number.isFinite(parsedL)", webapp_js)
+        self.assertIn("Number.isFinite(parsed) && String(hueVal).trim() !== \"\" ? parsed : 160", webapp_js)
+        self.assertIn("else if (this.activeTripIdx !== null && idx < this.activeTripIdx)", webapp_js)
+
+        engine_path = os.path.join(root_dir, "cloudflare", "src", "services", "PackingEngineService.js")
+        with open(engine_path, "r", encoding="utf-8") as f:
+            engine_js = f.read()
+        self.assertIn('countryCode: weather.countryCode || ""', engine_js)
+
+        mcp_path = os.path.join(root_dir, "cloudflare", "src", "mcp", "McpRouter.js")
+        with open(mcp_path, "r", encoding="utf-8") as f:
+            mcp_js = f.read()
+        self.assertIn('geminiApiKey: this.env?.GEMINI_API_KEY || ""', mcp_js)
+
+        self.assertIn("BackHandler(enabled = isBusy)", interview_kt)
+        self.assertIn("quantity = editQty.toIntOrNull()?.coerceAtLeast(1) ?: item.quantity", trip_kt)
 
 
 if __name__ == "__main__":

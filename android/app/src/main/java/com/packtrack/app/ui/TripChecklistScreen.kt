@@ -236,7 +236,12 @@ fun TripChecklistScreen(
                     modeLabels.forEach { (mode, label) ->
                         val selected = currentMode == mode
                         Surface(
-                            onClick = { scope.launch { dao.updateTripMode(activeTrip.id, mode.code) } },
+                            onClick = {
+                                scope.launch {
+                                    dao.updateTripMode(activeTrip.id, mode.code)
+                                    FirestoreSyncService.pushLocalStateToFirestore(dao, currentUserId)
+                                }
+                            },
                             shape = RoundedCornerShape(9.dp),
                             color = if (selected) MaterialTheme.colorScheme.primary else Color.Transparent,
                             modifier = Modifier.weight(1f)
@@ -794,6 +799,7 @@ fun TripChecklistScreen(
                             onClick = {
                                 val target = item.copy(
                                     name = editName.trim().ifEmpty { item.name },
+                                    quantity = editQty.toIntOrNull()?.coerceAtLeast(1) ?: item.quantity,
                                     category = editCategory,
                                     bagLocation = editBag,
                                     isDoorwayCritical = editDoorway
@@ -883,14 +889,14 @@ fun TripChecklistScreen(
             TripDateUtils.computeEndDate(initialStartIso, activeTrip.durationDays, today).toString()
         }
 
-        var editStartDate by remember(activeTrip.id, activeTrip.startDate) { mutableStateOf(initialStartIso) }
-        var editEndDate by remember(activeTrip.id, activeTrip.startDate, activeTrip.durationDays) { mutableStateOf(initialEndIso) }
+        var editStartDate by remember(activeTrip.id) { mutableStateOf(initialStartIso) }
+        var editEndDate by remember(activeTrip.id) { mutableStateOf(initialEndIso) }
         val editDays = remember(editStartDate, editEndDate) {
             TripDateUtils.computeDurationDays(editStartDate, editEndDate, activeTrip.durationDays)
         }
-        var editCarMode by remember(activeTrip.id, activeTrip.tagsCsv) { mutableStateOf(initialParsedTags.carMode) }
-        var editLuggageSpace by remember(activeTrip.id, activeTrip.tagsCsv) { mutableStateOf(initialParsedTags.luggageSpace) }
-        var editIsWork by remember(activeTrip.id, activeTrip.tagsCsv) { mutableStateOf(initialParsedTags.isWork) }
+        var editCarMode by remember(activeTrip.id) { mutableStateOf(initialParsedTags.carMode) }
+        var editLuggageSpace by remember(activeTrip.id) { mutableStateOf(initialParsedTags.luggageSpace) }
+        var editIsWork by remember(activeTrip.id) { mutableStateOf(initialParsedTags.isWork) }
 
         fun openDatePicker(currentIso: String, onPicked: (String) -> Unit) {
             val initDate = TripDateUtils.parseStartDate(currentIso) ?: today
@@ -935,11 +941,12 @@ fun TripChecklistScreen(
                         Surface(
                             onClick = {
                                 openDatePicker(editStartDate) { pickedStart ->
+                                    val prevDays = editDays
                                     editStartDate = pickedStart
                                     val s = TripDateUtils.parseStartDate(pickedStart) ?: today
-                                    val e = TripDateUtils.parseStartDate(editEndDate) ?: s.plusDays(editDays.toLong())
+                                    val e = TripDateUtils.parseStartDate(editEndDate) ?: s.plusDays(prevDays.toLong())
                                     if (!e.isAfter(s)) {
-                                        editEndDate = s.plusDays(maxOf(1, activeTrip.durationDays).toLong()).toString()
+                                        editEndDate = s.plusDays(maxOf(1, prevDays).toLong()).toString()
                                     }
                                 }
                             },
@@ -967,7 +974,12 @@ fun TripChecklistScreen(
                                 openDatePicker(editEndDate) { pickedEnd ->
                                     val s = TripDateUtils.parseStartDate(editStartDate) ?: today
                                     val e = TripDateUtils.parseStartDate(pickedEnd) ?: s.plusDays(1)
-                                    editEndDate = if (e.isAfter(s)) pickedEnd else s.plusDays(1).toString()
+                                    if (e.isAfter(s)) {
+                                        editEndDate = pickedEnd
+                                    } else {
+                                        editStartDate = e.minusDays(1).toString()
+                                        editEndDate = pickedEnd
+                                    }
                                 }
                             },
                             shape = RoundedCornerShape(10.dp),
@@ -1141,18 +1153,28 @@ fun TripChecklistScreen(
             confirmButton = {
                 Button(
                     onClick = {
+                        val chosenStartDate = editStartDate
+                        val chosenEndDate = editEndDate
+                        val chosenDays = TripDateUtils.computeDurationDays(
+                            chosenStartDate,
+                            chosenEndDate,
+                            activeTrip.durationDays
+                        )
+                        val chosenIsWork = editIsWork
+                        val chosenCarMode = editCarMode
+                        val chosenLuggageSpace = editLuggageSpace
                         showRecreateConfirmDialog = false
                         isRefreshingWeather = true
                         scope.launch {
                             try {
                                 val summary = voiceAssistant.recreateTripChecklist(
                                     tripId = tripId,
-                                    newStartDate = editStartDate,
-                                    newEndDate = editEndDate,
-                                    newDays = editDays,
-                                    newIsWork = editIsWork,
-                                    newCarMode = editCarMode,
-                                    newLuggageSpace = editLuggageSpace
+                                    newStartDate = chosenStartDate,
+                                    newEndDate = chosenEndDate,
+                                    newDays = chosenDays,
+                                    newIsWork = chosenIsWork,
+                                    newCarMode = chosenCarMode,
+                                    newLuggageSpace = chosenLuggageSpace
                                 )
                                 Toast.makeText(context, summary, Toast.LENGTH_SHORT).show()
                             } finally {

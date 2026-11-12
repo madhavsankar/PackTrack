@@ -46,15 +46,15 @@ class GeminiVoiceAssistant(
 
         val DEFAULT_MODEL_CASCADE: List<String> = listOf(
             "gemini-flash-latest",
-            "gemini-3.8-flash",
-            "gemini-3.6-flash",
             "gemini-3-flash-preview",
-            "gemini-3.5-flash-lite",
-            "gemini-3.1-flash-lite",
             "gemini-3.1-flash-lite-preview",
             "gemini-flash-lite-latest",
             "gemini-3.1-pro-preview",
-            "gemini-pro-latest"
+            "gemini-pro-latest",
+            "gemini-3.8-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite"
         )
 
         val EMERGENCY_LAST_RESORT_MODELS: List<String> = listOf(
@@ -72,7 +72,7 @@ class GeminiVoiceAssistant(
         private var lastWorkingModel: String? = null
 
         fun extractCleanJson(rawText: String): String? {
-            val cleaned = rawText
+            var cleaned = rawText
                 .replace(Regex("^```(?:json)?\\s*", RegexOption.IGNORE_CASE), "")
                 .replace(Regex("\\s*```$"), "")
                 .trim()
@@ -128,17 +128,65 @@ class GeminiVoiceAssistant(
                 }
             }
             if (isValidJson(cleaned)) return cleaned
+            val fencedMatch = Regex("```(?:json)?\\s*([\\s\\S]*?)\\s*```", RegexOption.IGNORE_CASE).find(cleaned)
+            if (fencedMatch != null) {
+                val inner = fencedMatch.groupValues[1].trim()
+                if (isValidJson(inner)) return inner
+                if (inner.isNotEmpty()) cleaned = inner
+            }
             val objStart = cleaned.indexOf('{')
             val objEnd = cleaned.lastIndexOf('}')
-            if (objStart != -1 && objEnd > objStart) {
-                val sub = cleaned.substring(objStart, objEnd + 1)
-                if (isValidJson(sub)) return sub
-            }
             val arrStart = cleaned.indexOf('[')
             val arrEnd = cleaned.lastIndexOf(']')
-            if (arrStart != -1 && arrEnd > arrStart) {
-                val sub = cleaned.substring(arrStart, arrEnd + 1)
-                if (isValidJson(sub)) return sub
+            val hasObj = objStart != -1 && objEnd > objStart
+            val hasArr = arrStart != -1 && arrEnd > arrStart
+            val candidates = mutableListOf<String>()
+            if (hasArr && (!hasObj || arrStart < objStart)) {
+                candidates.add(cleaned.substring(arrStart, arrEnd + 1))
+                if (hasObj) candidates.add(cleaned.substring(objStart, objEnd + 1))
+            } else {
+                if (hasObj) candidates.add(cleaned.substring(objStart, objEnd + 1))
+                if (hasArr) candidates.add(cleaned.substring(arrStart, arrEnd + 1))
+            }
+            for (cand in candidates) {
+                if (isValidJson(cand)) return cand
+            }
+            return null
+        }
+
+        /**
+         * Extracts valid JSON from a Gemini `generateContent` response JSONObject, safely handling
+         * multi-part responses from thinking models (where `parts[0]` has `thought = true` and a
+         * subsequent part contains the structured JSON payload).
+         */
+        fun extractCandidateJson(responseJson: JSONObject): String? {
+            val parts = responseJson.optJSONArray("candidates")
+                ?.optJSONObject(0)
+                ?.optJSONObject("content")
+                ?.optJSONArray("parts") ?: return null
+            if (parts.length() == 0) return null
+
+            val nonThoughtTexts = mutableListOf<String>()
+            for (i in 0 until parts.length()) {
+                val p = parts.optJSONObject(i) ?: continue
+                if (!p.optBoolean("thought", false)) {
+                    val t = p.optString("text", "").trim()
+                    if (t.isNotEmpty()) nonThoughtTexts.add(t)
+                }
+            }
+            for (i in nonThoughtTexts.indices.reversed()) {
+                val valid = extractCleanJson(nonThoughtTexts[i])
+                if (valid != null) return valid
+            }
+            if (nonThoughtTexts.size > 1) {
+                val joined = nonThoughtTexts.joinToString("\n")
+                val validJoined = extractCleanJson(joined)
+                if (validJoined != null) return validJoined
+            }
+            for (i in (parts.length() - 1) downTo 0) {
+                val p = parts.optJSONObject(i) ?: continue
+                val valid = extractCleanJson(p.optString("text", ""))
+                if (valid != null) return valid
             }
             return null
         }
@@ -262,6 +310,8 @@ class GeminiVoiceAssistant(
             changes.add("scaled clothes to $days days")
         }
 
+        var usedFallbackOnRefresh = false
+        var generatedViaGemini = false
         if (existingSuggestions.isEmpty()) {
             val tags = trip.tagsCsv.split(",").map { it.trim().lowercase() }
             val isWork = tags.contains("work")
@@ -276,7 +326,7 @@ class GeminiVoiceAssistant(
                 tags.contains("personal_only") -> LuggageSpace.PERSONAL_ONLY
                 else -> LuggageSpace.CARRY_ON
             }
-            val newSuggestions = generateWeatherSuggestionsWithGemini(
+            val geminiOnly = tryGenerateSuggestionsViaGeminiOnly(
                 tripId = tripId,
                 days = days,
                 isWork = isWork,
@@ -285,26 +335,52 @@ class GeminiVoiceAssistant(
                 forecast = forecast,
                 templateItems = activeItems
             )
+            val newSuggestions = if (geminiOnly.isNotEmpty()) {
+                generatedViaGemini = true
+                geminiOnly
+            } else {
+                usedFallbackOnRefresh = true
+                ChecklistCalculator.buildDynamicWeatherSuggestions(
+                    tripId = tripId,
+                    carMode = carMode,
+                    forecast = forecast,
+                    existingItems = activeItems
+                )
+            }
             if (newSuggestions.isNotEmpty()) {
                 dao.insertItems(newSuggestions)
-                changes.add("${newSuggestions.size} Gemini weather suggestion(s)")
+                changes.add(
+                    if (generatedViaGemini) "${newSuggestions.size} Gemini weather suggestion(s)"
+                    else "${newSuggestions.size} weather suggestion(s)"
+                )
             }
         }
 
-        val hadFallback = trip.lastAgentNote.contains(FALLBACK_TAG)
-        val fallbackPrefix = if (hadFallback) "$FALLBACK_TAG Gemini unavailable — rule-based backup used • " else ""
+        // Re-read the latest trip row before updating so a concurrent recreateTripChecklist is never overwritten by a stale note
+        val latestTrip = dao.getTripById(tripId) ?: trip
+        val showFallback = when {
+            generatedViaGemini -> false
+            usedFallbackOnRefresh -> true
+            else -> latestTrip.lastAgentNote.contains(FALLBACK_TAG)
+        }
+        val fallbackPrefix = if (showFallback) "$FALLBACK_TAG Gemini unavailable — rule-based backup used • " else ""
         val summary = if (changes.isEmpty()) {
-            "${fallbackPrefix}Refreshed ${trip.destination} weather (${forecast.avgLowF.toInt()}°F–${forecast.avgHighF.toInt()}°F, ${forecast.rainyDaysCount} rainy days)."
+            if (latestTrip.lastAgentNote.startsWith("Recreated ") && !showFallback) {
+                latestTrip.lastAgentNote
+            } else {
+                "${fallbackPrefix}Refreshed ${latestTrip.destination} weather (${forecast.avgLowF.toInt()}°F–${forecast.avgHighF.toInt()}°F, ${forecast.rainyDaysCount} rainy days)."
+            }
         } else {
-            "${fallbackPrefix}Updated ${trip.destination} (${forecast.avgLowF.toInt()}°F–${forecast.avgHighF.toInt()}°F, ${forecast.rainyDaysCount} rainy days): ${changes.joinToString(", ")}."
+            "${fallbackPrefix}Updated ${latestTrip.destination} (${forecast.avgLowF.toInt()}°F–${forecast.avgHighF.toInt()}°F, ${forecast.rainyDaysCount} rainy days): ${changes.joinToString(", ")}."
         }
 
+        val finalDays = newDaysOverride ?: latestTrip.durationDays
         dao.updateTripWeatherAndDuration(
             tripId = tripId,
             highF = forecast.avgHighF,
             lowF = forecast.avgLowF,
             rainDays = forecast.rainyDaysCount,
-            days = days,
+            days = finalDays,
             note = summary
         )
         FirestoreSyncService.pushLocalStateToFirestore(dao, currentUserId)
@@ -325,12 +401,12 @@ class GeminiVoiceAssistant(
         newIsWork: Boolean? = null,
         newCarMode: CarTransportMode? = null,
         newLuggageSpace: LuggageSpace? = null
-    ): String = withContext(Dispatchers.IO) {
+    ): String = withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
         val trip = dao.getTripById(tripId) ?: return@withContext "Trip not found."
         val cleanUser = FirestoreSyncService.sanitizeUserId(currentUserId)
+        FirestoreSyncService.markLocalMutation()
         // Snapshot local items before pulling from Firestore so any checkmarks just toggled on-device are never lost
         val localItemsBeforeSync = dao.getItemsForTrip(tripId)
-        FirestoreSyncService.pullFromFirestoreIfNeeded(dao, cleanUser)
 
         val parsedTags = com.packtrack.app.domain.TripDateUtils.parseTripTags(trip.tagsCsv)
         val effectiveStartDate = newStartDate?.trim()?.takeIf { it.isNotEmpty() } ?: trip.startDate
@@ -353,6 +429,28 @@ class GeminiVoiceAssistant(
         } else {
             newLuggageSpace ?: parsedTags.luggageSpace
         }
+
+        // Persist the updated startDate and duration immediately so the UI header reflects the new dates right away
+        val initialTagsCsv = com.packtrack.app.domain.TripDateUtils.buildTagsCsv(
+            isWork = isWork,
+            carMode = carMode,
+            luggageSpace = luggageSpace,
+            isInternational = trip.tagsCsv.contains("international", ignoreCase = true)
+        )
+        dao.updateTripDetailsAndWeather(
+            tripId = tripId,
+            startDate = effectiveStartDate,
+            days = effectiveDays,
+            tagsCsv = initialTagsCsv,
+            highF = trip.avgHighF,
+            lowF = trip.avgLowF,
+            rainDays = trip.rainyDaysCount,
+            note = trip.lastAgentNote
+        )
+
+        FirestoreSyncService.pullFromFirestoreIfNeeded(dao, cleanUser)
+        // Re-assert startDate after Firestore pull in case cloud still had an older startDate
+        dao.updateTripStartDate(tripId, effectiveStartDate)
 
         val forecast = OpenMeteoWeatherService.fetchWeather(
             trip.destination,
@@ -406,7 +504,14 @@ class GeminiVoiceAssistant(
             }
         }
 
-        val finalItems = templateItems + suggestedItems
+        val recreatedNames = (templateItems + suggestedItems).map { it.name.trim().lowercase() }.toMutableSet()
+        val preservedExtras = existingActiveByLowerName.values.filter { prev ->
+            val key = prev.name.trim().lowercase()
+            if (key in recreatedNames) return@filter false
+            val reason = prev.weatherReason
+            reason == "Custom item" || reason == "Added on the fly" || reason == "Added via voice" || reason.startsWith("✨ ")
+        }.map { it.copy(id = 0, tripId = tripId) }
+        val finalItems = templateItems + preservedExtras + suggestedItems
 
         dao.deleteAllItemsForTrip(tripId)
         dao.insertItems(finalItems)
@@ -458,9 +563,10 @@ class GeminiVoiceAssistant(
         luggageSpace: LuggageSpace = LuggageSpace.CARRY_ON,
         startDate: String = java.time.LocalDate.now().toString(),
         endDate: String? = null
-    ): Pair<Long, String> = withContext(Dispatchers.IO) {
+    ): Pair<Long, String> = withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
         val cleanUser = FirestoreSyncService.sanitizeUserId(currentUserId)
         FirestoreSyncService.pullFromFirestoreIfNeeded(dao, cleanUser)
+        FirestoreSyncService.markLocalMutation()
         val forecast = OpenMeteoWeatherService.fetchWeather(destinationQuery, days, startDate, endDate)
         val note = "${forecast.city} ($days days): ${forecast.avgLowF.toInt()}°F–${forecast.avgHighF.toInt()}°F, " +
             "${forecast.rainyDaysCount} rainy days • ${carMode.label} • ${luggageSpace.label}"
@@ -563,25 +669,41 @@ class GeminiVoiceAssistant(
                     else -> minOf(days, 6)
                 }
 
-                val rulesText = customRules.joinToString("\n") { r ->
+                val isUnconditionalAlwaysRule = { r: TemplateRuleEntity ->
+                    val cond = r.moduleKey.trim().lowercase()
+                    val hasEmbeddedCond = Regex("\\b(if|when|only|unless)\\b", RegexOption.IGNORE_CASE).containsMatchIn(r.name)
+                    (cond.isEmpty() || cond == "always") && !hasEmbeddedCond
+                }
+                val conditionalRules = customRules.filterNot(isUnconditionalAlwaysRule)
+                val rulesToEvaluate = if (conditionalRules.isNotEmpty()) conditionalRules else customRules
+                val ruleByLowerName = customRules.associateBy { it.name.trim().lowercase() }
+                val alwaysBaseNames = fallbackTemplateItems
+                    .filter { fb ->
+                        val r = ruleByLowerName[fb.name.trim().lowercase()]
+                        r == null || isUnconditionalAlwaysRule(r)
+                    }
+                    .joinToString(", ") { "${it.name} (x${it.quantity})" }
+
+                val rulesText = rulesToEvaluate.joinToString("\n") { r ->
                     val scaleDesc = if (r.scaleByDays) "scale_by_days=true (ratio=${r.ratioPerDay}/day, effectiveDays=$effectiveDays)" else "fixed_qty=1"
                     "  - Item: \"${r.name}\" | Category: \"${r.category}\" | Bag: \"${r.bagLocation}\" | Condition: \"${r.moduleKey}\" | Scaling: $scaleDesc"
                 }
 
+                val showPlug = TravelerTemplateCatalog.isPlugInfoNeeded(forecast.country, forecast.countryCode, forecast.plugTypes)
                 val prompt = """
                     You are PackTrack's intelligent packing rule evaluator and weather advisor.
 
-                    TASK 1 (`templateItems` — Evaluate User's Default Template Rules):
-                    Evaluate EVERY item in the user's Default Template below against the TRIP DETAILS and DAY-BY-DAY WEATHER FORECAST.
+                    TASK 1 (`templateItems` — Evaluate User's Conditional Template Rules):
+                    Evaluate each item in USER'S TEMPLATE RULES below against the TRIP DETAILS and DAY-BY-DAY WEATHER FORECAST.
                     - Include an item in `templateItems` IF AND ONLY IF its `Condition` is satisfied for this trip (for example: "Always" is always included; "Only when working" or "if work is expected to be done" is included only when Purpose is Work; complex natural-language conditions like "Only add this when there is at least one rainy day and if trip is for more than 5 days and only when we go to India" are included only when ALL parts of that condition hold true for this trip).
                     - If `scale_by_days=true`, compute `quantity = ceil(effectiveDays * ratio)`. Otherwise `quantity = 1`. Keep `reason` concise (max 8 words) for templateItems.
 
                     TASK 2 (`suggestedItems` — Dynamic Weather & Trip Suggestions):
-                    Suggest 2 to 5 additional practical items or preparations tailored to the day-by-day forecast, destination, and vehicle mode that are NOT already in `templateItems` (e.g. raincoat/umbrella citing rainy days, snow tires/ice scraper if freezing/snowing while driving, sun hat/sunscreen on high-UV/hot days, windbreaker on windy days${if (TravelerTemplateCatalog.isPlugInfoNeeded(forecast.country, forecast.countryCode, forecast.plugTypes)) ", or ${forecast.plugTypes} power adapter" else "; do NOT suggest a power/plug adapter for USA or India trips"}).
+                    Suggest 2 to 5 additional practical items or preparations tailored to the day-by-day forecast, destination, and vehicle mode that are NOT already in `templateItems` or BASE ITEMS ALREADY PACKED (e.g. raincoat/umbrella citing rainy days, snow tires/ice scraper if freezing/snowing while driving, sun hat/sunscreen on high-UV/hot days, windbreaker on windy days${if (showPlug) ", or ${forecast.plugTypes} power adapter" else "; do NOT suggest a power/plug adapter for USA or India trips"}).
 
                     TRIP DETAILS:
                     - Destination City: ${forecast.city}
-                    - Destination Country: ${forecast.country} (Country Code: ${forecast.countryCode}, International: ${forecast.isInternational}${if (TravelerTemplateCatalog.isPlugInfoNeeded(forecast.country, forecast.countryCode, forecast.plugTypes)) ", Plug: ${forecast.plugTypes}" else ""})
+                    - Destination Country: ${forecast.country} (Country Code: ${forecast.countryCode}, International: ${forecast.isInternational}${if (showPlug) ", Plug: ${forecast.plugTypes}" else ""})
                     - Duration: $days days (Effective clothing scaling days: $effectiveDays)
                     - Transport / Vehicle: ${carMode.label} (Driving Personal Car: ${carMode == CarTransportMode.OWN_CAR}, Rental Car: ${carMode == CarTransportMode.RENTAL_CAR}, Flying: ${carMode != CarTransportMode.OWN_CAR})
                     - Luggage Space: ${luggageSpace.label}
@@ -590,22 +712,43 @@ class GeminiVoiceAssistant(
                     DAY-BY-DAY WEATHER FORECAST (Avg Low: ${forecast.avgLowF.toInt()}°F, Avg High: ${forecast.avgHighF.toInt()}°F, Rainy Days: ${forecast.rainyDaysCount}):
                     $dailyWeatherText
 
-                    USER'S DEFAULT TEMPLATE RULES:
+                    BASE ITEMS ALREADY PACKED (DO NOT DUPLICATE IN suggestedItems): ${alwaysBaseNames.ifEmpty { "None" }}
+
+                    USER'S TEMPLATE RULES TO EVALUATE FOR `templateItems`:
                     $rulesText
+
+                    Return ONLY a valid JSON object matching this exact schema:
+                    {"templateItems":[{"name":"...","category":"On Me|Docs|Electronics|Clothes|Toiletry|Others","quantity":1,"bagLocation":"Personal|Carry-On|Check-In","reason":"..."}],"suggestedItems":[{"name":"...","category":"On Me|Docs|Electronics|Clothes|Toiletry|Others","quantity":1,"bagLocation":"Personal|Carry-On|Check-In","reason":"..."}]}
                 """.trimIndent()
 
                 val allowedCategories = PackTrackThemeState.allCategories(customRules.map { it.category })
                 val rawText = callGeminiEvaluateAndSuggest(prompt, allowedCategories)
-                val cleanJson = extractCleanJson(rawText) ?: rawText
-                val rootObj = JSONObject(cleanJson)
-                val ruleByLowerName = customRules.associateBy { it.name.trim().lowercase() }
+                val cleanJson = (extractCleanJson(rawText) ?: rawText).trim()
+                val rootObj = if (cleanJson.startsWith("[")) {
+                    JSONObject().put("templateItems", JSONArray()).put("suggestedItems", JSONArray(cleanJson))
+                } else {
+                    JSONObject(cleanJson)
+                }
 
                 val parsedTemplate = mutableListOf<PackingItemEntity>()
                 val seenNames = mutableSetOf<String>()
-                val templateArr = rootObj.optJSONArray("templateItems") ?: JSONArray()
+
+                // 1. Preserve all unconditional "Always" template rules in template order
+                for (fallbackItem in fallbackTemplateItems) {
+                    val key = fallbackItem.name.trim().lowercase()
+                    val rule = ruleByLowerName[key]
+                    if ((rule == null || isUnconditionalAlwaysRule(rule)) && seenNames.add(key)) {
+                        parsedTemplate.add(fallbackItem)
+                    }
+                }
+
+                // 2. Add Gemini-evaluated conditional template items
+                val templateArr = rootObj.optJSONArray("templateItems")
+                    ?: rootObj.optJSONArray("template_items")
+                    ?: JSONArray()
                 for (i in 0 until templateArr.length()) {
                     val obj = templateArr.optJSONObject(i) ?: continue
-                    val name = obj.optString("name", "").trim()
+                    val name = obj.optString("name", obj.optString("item", "")).trim()
                     if (name.isEmpty()) continue
                     val key = name.lowercase()
                     if (!seenNames.add(key)) continue
@@ -615,7 +758,10 @@ class GeminiVoiceAssistant(
                     )
                     val qty = obj.optInt("quantity", 1).coerceAtLeast(1)
                     val bag = BagLocation.fromLabel(
-                        obj.optString("bagLocation", matchedRule?.bagLocation ?: BagLocation.CARRY_ON.label)
+                        obj.optString(
+                            "bagLocation",
+                            obj.optString("bag", matchedRule?.bagLocation ?: BagLocation.CARRY_ON.label)
+                        )
                     ).label
                     val reason = ChecklistCalculator.stripSuggestedPrefix(obj.optString("reason", ""))
                     parsedTemplate.add(
@@ -632,29 +778,27 @@ class GeminiVoiceAssistant(
                     )
                 }
 
-                // Ensure any "Always" template rules are never accidentally dropped
-                for (fallbackItem in fallbackTemplateItems) {
-                    val key = fallbackItem.name.trim().lowercase()
-                    val rule = ruleByLowerName[key]
-                    val isAlways = rule == null || rule.moduleKey.isBlank() || rule.moduleKey.equals("Always", ignoreCase = true)
-                    if (isAlways && seenNames.add(key)) {
-                        parsedTemplate.add(fallbackItem)
-                    }
-                }
+                val finalTemplate = if (parsedTemplate.isNotEmpty()) parsedTemplate else fallbackTemplateItems
+                finalTemplate.forEach { seenNames.add(it.name.trim().lowercase()) }
 
                 val parsedSuggestions = mutableListOf<PackingItemEntity>()
-                val suggestedArr = rootObj.optJSONArray("suggestedItems") ?: JSONArray()
-                val suppressPlug = TravelerTemplateCatalog.isUsaOrIndia(forecast.country, forecast.countryCode, forecast.plugTypes)
+                val suggestedArr = rootObj.optJSONArray("suggestedItems")
+                    ?: rootObj.optJSONArray("suggested_items")
+                    ?: rootObj.optJSONArray("suggestions")
+                    ?: JSONArray()
+                val suppressPlug = !showPlug
                 for (i in 0 until suggestedArr.length()) {
                     val obj = suggestedArr.optJSONObject(i) ?: continue
-                    val name = obj.optString("name", "").trim()
+                    val name = obj.optString("name", obj.optString("item", "")).trim()
                     if (name.isEmpty()) continue
                     val key = name.lowercase()
                     if (suppressPlug && (key.contains("adapter") || key.contains("plug converter"))) continue
                     if (!seenNames.add(key)) continue
                     val category = PackingCategory.canonicalize(obj.optString("category", "Others"))
                     val qty = obj.optInt("quantity", 1).coerceAtLeast(1)
-                    val bag = BagLocation.fromLabel(obj.optString("bagLocation", BagLocation.CARRY_ON.label)).label
+                    val bag = BagLocation.fromLabel(
+                        obj.optString("bagLocation", obj.optString("bag", BagLocation.CARRY_ON.label))
+                    ).label
                     val reason = ChecklistCalculator.stripSuggestedPrefix(
                         obj.optString("reason", "Suggested by Gemini for ${forecast.city} weather")
                     )
@@ -672,14 +816,30 @@ class GeminiVoiceAssistant(
                     )
                 }
 
-                if (parsedTemplate.isNotEmpty()) {
-                    val finalSuggestions = if (parsedSuggestions.isNotEmpty()) {
-                        parsedSuggestions
+                val finalSuggestions = if (parsedSuggestions.isNotEmpty()) {
+                    parsedSuggestions
+                } else {
+                    val stage2 = tryGenerateSuggestionsViaGeminiOnly(
+                        tripId,
+                        days,
+                        isWork,
+                        carMode,
+                        luggageSpace,
+                        forecast,
+                        finalTemplate
+                    )
+                    if (stage2.isNotEmpty()) {
+                        stage2
                     } else {
-                        generateWeatherSuggestionsWithGemini(tripId, days, isWork, carMode, luggageSpace, forecast, parsedTemplate)
+                        ChecklistCalculator.buildDynamicWeatherSuggestions(
+                            tripId = tripId,
+                            carMode = carMode,
+                            forecast = forecast,
+                            existingItems = finalTemplate
+                        )
                     }
-                    return Triple(parsedTemplate, finalSuggestions, false)
                 }
+                return Triple(finalTemplate, finalSuggestions, false)
             } catch (_: Exception) {
                 // Fall through to Stage 2 lightweight Gemini suggestions call below
             }
@@ -757,21 +917,32 @@ class GeminiVoiceAssistant(
 
             val allowedCategories = PackTrackThemeState.allCategories(templateItems.map { it.category })
             val rawText = callGeminiGenerateContent(prompt, allowedCategories)
-            val cleanJson = extractCleanJson(rawText) ?: rawText
-            val arr = JSONArray(cleanJson)
+            val cleanJson = (extractCleanJson(rawText) ?: rawText).trim()
+            val arr = if (cleanJson.startsWith("[")) {
+                JSONArray(cleanJson)
+            } else {
+                val root = JSONObject(cleanJson)
+                root.optJSONArray("suggestedItems")
+                    ?: root.optJSONArray("suggested_items")
+                    ?: root.optJSONArray("suggestions")
+                    ?: root.optJSONArray("items")
+                    ?: if (root.has("name")) JSONArray().put(root) else JSONArray()
+            }
             val suggestions = mutableListOf<PackingItemEntity>()
             val seenSuggested = mutableSetOf<String>()
             val suppressPlug = !showPlug
             for (i in 0 until arr.length()) {
                 val obj = arr.optJSONObject(i) ?: continue
-                val name = obj.optString("name", "").trim()
+                val name = obj.optString("name", obj.optString("item", "")).trim()
                 if (name.isEmpty()) continue
                 val key = name.lowercase()
                 if (suppressPlug && (key.contains("adapter") || key.contains("plug converter"))) continue
                 if (key in existingNamesLower || !seenSuggested.add(key)) continue
                 val category = PackingCategory.canonicalize(obj.optString("category", "Others"))
                 val qty = obj.optInt("quantity", 1).coerceAtLeast(1)
-                val bag = BagLocation.fromLabel(obj.optString("bagLocation", BagLocation.CARRY_ON.label)).label
+                val bag = BagLocation.fromLabel(
+                    obj.optString("bagLocation", obj.optString("bag", BagLocation.CARRY_ON.label))
+                ).label
                 val reason = ChecklistCalculator.stripSuggestedPrefix(
                     obj.optString("reason", "Suggested by Gemini for ${forecast.city} weather")
                 )
@@ -1055,16 +1226,21 @@ class GeminiVoiceAssistant(
         val schemaBytes = buildPayloadBytes(includeSchema = true)
         val plainJsonBytes = buildPayloadBytes(includeSchema = false)
         val primaryCascade = resolveModelCascade()
-        val fullCascade = primaryCascade + EMERGENCY_LAST_RESORT_MODELS.filterNot { it in primaryCascade }
+        val speculativeAliases = setOf("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
+        val discoveredSet = (cachedDiscoveredModels ?: emptyList()).toSet()
+        val activePrimary = primaryCascade.filter { it !in speculativeAliases || it in discoveredSet }
+        val speculativeTail = primaryCascade.filter { it in speculativeAliases && it !in discoveredSet }
+        val fullCascade = (activePrimary + EMERGENCY_LAST_RESORT_MODELS + speculativeTail).distinct()
         val startedAtMs = System.currentTimeMillis()
-        val maxTotalWallMs = 16_000L
-        val maxTotalCalls = 7
+        val maxTotalWallMs = 24_000L
+        val maxTotalCalls = 14
         var totalCalls = 0
 
         for ((mIdx, modelId) in fullCascade.withIndex()) {
             var useSchema = true
-            val effectiveMaxRetries = if (mIdx >= 2) minOf(1, maxRetriesPerModel) else maxRetriesPerModel
-            for (attempt in 0..effectiveMaxRetries) {
+            val effectiveMaxRetries = if (mIdx >= 3) minOf(1, maxRetriesPerModel) else maxRetriesPerModel
+            var attempt = 0
+            while (attempt <= effectiveMaxRetries) {
                 if (totalCalls >= maxTotalCalls || System.currentTimeMillis() - startedAtMs > maxTotalWallMs) {
                     break
                 }
@@ -1073,38 +1249,35 @@ class GeminiVoiceAssistant(
                     val conn = (URL("$MODELS_BASE_URL/$modelId:generateContent?key=$geminiApiKey").openConnection() as HttpURLConnection).apply {
                         requestMethod = "POST"
                         setRequestProperty("Content-Type", "application/json")
-                        connectTimeout = 6000
-                        readTimeout = 9000
+                        connectTimeout = 5000
+                        readTimeout = 6500
                         doOutput = true
                     }
                     conn.outputStream.use { it.write(if (useSchema) schemaBytes else plainJsonBytes) }
                     val status = conn.responseCode
                     if (status !in 200..299) {
-                        // If a model rejects nested responseSchema with 400, retry immediately with plain JSON mode
+                        // If a model rejects nested responseSchema with 400, retry immediately with plain JSON mode without penalizing attempt/call caps
                         if (status == 400 && useSchema) {
                             useSchema = false
+                            totalCalls = maxOf(0, totalCalls - 1)
                             continue
                         }
                         // 404 (model not found) or 401/403 -> immediately try next model in cascade
                         if (status == 404 || status == 401 || status == 403) {
+                            if (status == 404) totalCalls = maxOf(0, totalCalls - 1)
                             break
                         }
                         // Transient 429 / 5xx / 408 -> backoff and retry on this model before failing over
                         if (attempt < effectiveMaxRetries) {
                             Thread.sleep(250L * (attempt + 1))
+                            attempt++
                             continue
                         }
                         break
                     }
                     val responseText = conn.inputStream.bufferedReader().use { it.readText() }
                     val json = JSONObject(responseText)
-                    val text = json.optJSONArray("candidates")
-                        ?.optJSONObject(0)
-                        ?.optJSONObject("content")
-                        ?.optJSONArray("parts")
-                        ?.optJSONObject(0)
-                        ?.optString("text", "") ?: ""
-                    val cleanJson = extractCleanJson(text)
+                    val cleanJson = extractCandidateJson(json)
                     if (cleanJson != null) {
                         lastWorkingModel = modelId
                         return cleanJson
@@ -1112,6 +1285,9 @@ class GeminiVoiceAssistant(
                     if (attempt < effectiveMaxRetries) {
                         Thread.sleep(250L * (attempt + 1))
                     }
+                } catch (e: java.net.SocketTimeoutException) {
+                    // If a model timed out, fail over immediately to the next model in the cascade
+                    break
                 } catch (_: Exception) {
                     if (attempt < effectiveMaxRetries) {
                         try {
@@ -1120,6 +1296,7 @@ class GeminiVoiceAssistant(
                         }
                     }
                 }
+                attempt++
             }
         }
         throw IllegalStateException("All Gemini models in cascade failed after retries.")

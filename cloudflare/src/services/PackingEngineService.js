@@ -222,9 +222,10 @@ export class PackingEngineService {
 
   /**
    * Strips optional markdown code fences and extracts valid JSON (`{...}` or `[...]`).
+   * Preserves outer array vs object priority based on which bracket appears first.
    */
   static extractCleanJson(rawText) {
-    const cleaned = String(rawText || "")
+    let cleaned = String(rawText || "")
       .replace(/^```(?:json)?\s*/i, "")
       .replace(/\s*```$/i, "")
       .trim();
@@ -233,13 +234,30 @@ export class PackingEngineService {
       JSON.parse(cleaned);
       return cleaned;
     } catch (_) {
+      const fencedMatch = cleaned.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+      if (fencedMatch && fencedMatch[1]) {
+        const inner = fencedMatch[1].trim();
+        try {
+          JSON.parse(inner);
+          return inner;
+        } catch (_) {
+          cleaned = inner;
+        }
+      }
       const objStart = cleaned.indexOf("{");
       const objEnd = cleaned.lastIndexOf("}");
       const arrStart = cleaned.indexOf("[");
       const arrEnd = cleaned.lastIndexOf("]");
       const candidates = [];
-      if (objStart !== -1 && objEnd > objStart) candidates.push(cleaned.slice(objStart, objEnd + 1));
-      if (arrStart !== -1 && arrEnd > arrStart) candidates.push(cleaned.slice(arrStart, arrEnd + 1));
+      const hasObj = objStart !== -1 && objEnd > objStart;
+      const hasArr = arrStart !== -1 && arrEnd > arrStart;
+      if (hasArr && (!hasObj || arrStart < objStart)) {
+        candidates.push(cleaned.slice(arrStart, arrEnd + 1));
+        if (hasObj) candidates.push(cleaned.slice(objStart, objEnd + 1));
+      } else {
+        if (hasObj) candidates.push(cleaned.slice(objStart, objEnd + 1));
+        if (hasArr) candidates.push(cleaned.slice(arrStart, arrEnd + 1));
+      }
       for (const cand of candidates) {
         try {
           JSON.parse(cand);
@@ -250,6 +268,34 @@ export class PackingEngineService {
       }
       return null;
     }
+  }
+
+  /**
+   * Extracts valid JSON from a Gemini `generateContent` response, safely handling multi-part
+   * responses from thinking models (where `parts[0]` has `{ thought: true, text: "..." }`
+   * and a subsequent part contains the structured JSON payload).
+   */
+  static extractCandidateJson(responseData) {
+    const parts = responseData?.candidates?.[0]?.content?.parts;
+    if (!Array.isArray(parts) || parts.length === 0) return null;
+
+    const nonThoughtParts = parts.filter(
+      (p) => p && !p.thought && typeof p.text === "string" && p.text.trim()
+    );
+    for (let i = nonThoughtParts.length - 1; i >= 0; i--) {
+      const valid = PackingEngineService.extractCleanJson(nonThoughtParts[i].text);
+      if (valid) return valid;
+    }
+    if (nonThoughtParts.length > 1) {
+      const joined = nonThoughtParts.map((p) => p.text).join("\n");
+      const validJoined = PackingEngineService.extractCleanJson(joined);
+      if (validJoined) return validJoined;
+    }
+    for (let i = parts.length - 1; i >= 0; i--) {
+      const valid = PackingEngineService.extractCleanJson(parts[i]?.text || "");
+      if (valid) return valid;
+    }
+    return null;
   }
 
   /**
@@ -270,9 +316,22 @@ export class PackingEngineService {
         ? cascadeOverride
         : await PackingEngineService.resolveModelCascade(cleanKey, fetchImpl);
 
-    const fullCascade = Array.isArray(cascadeOverride) && cascadeOverride.length > 0
-      ? primaryCascade
-      : [...primaryCascade, ...PackingEngineService.EMERGENCY_LAST_RESORT_MODELS.filter((m) => !primaryCascade.includes(m))];
+    let fullCascade;
+    if (Array.isArray(cascadeOverride) && cascadeOverride.length > 0) {
+      fullCascade = primaryCascade;
+    } else {
+      // Place active/discovered models + emergency 2.5 models ahead of non-discovered speculative aliases
+      const speculativeAliases = new Set(["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]);
+      const discoveredSet = new Set(
+        (PackingEngineService._cachedDiscoveredModels || []).map((m) =>
+          String(typeof m === "string" ? m : m?.name || "").replace(/^models\//, "").trim()
+        )
+      );
+      const activePrimary = primaryCascade.filter((m) => !speculativeAliases.has(m) || discoveredSet.has(m));
+      const speculativeTail = primaryCascade.filter((m) => speculativeAliases.has(m) && !discoveredSet.has(m));
+      const combined = [...activePrimary, ...PackingEngineService.EMERGENCY_LAST_RESORT_MODELS, ...speculativeTail];
+      fullCascade = Array.from(new Set(combined));
+    }
 
     const isLiveRuntime = typeof fetch !== "undefined" && fetchImpl === fetch && !cascadeOverride;
     const baseDelay =
@@ -284,15 +343,14 @@ export class PackingEngineService {
 
     const sleep = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
     const startedAt = Date.now();
-    const maxTotalNetworkCalls = isLiveRuntime ? 7 : 100;
-    const maxTotalWallMs = isLiveRuntime ? 16000 : 300000;
+    const maxTotalNetworkCalls = isLiveRuntime ? 14 : 100;
+    const maxTotalWallMs = isLiveRuntime ? 24000 : 300000;
     let totalNetworkCalls = 0;
 
     for (let mIdx = 0; mIdx < fullCascade.length; mIdx++) {
       const modelId = fullCascade[mIdx];
       let currentBody = requestBody;
-      // In live Cloudflare Worker runtime, retry top 2 models up to maxRetriesPerModel, and try remaining fallback models once to stay well within Worker subrequest/time limits
-      const effectiveMaxRetries = isLiveRuntime && mIdx >= 2 ? Math.min(1, maxRetriesPerModel) : maxRetriesPerModel;
+      const effectiveMaxRetries = isLiveRuntime && mIdx >= 3 ? Math.min(1, maxRetriesPerModel) : maxRetriesPerModel;
       for (let attempt = 0; attempt <= effectiveMaxRetries; attempt++) {
         if (totalNetworkCalls >= maxTotalNetworkCalls || Date.now() - startedAt > maxTotalWallMs) {
           return null;
@@ -304,7 +362,7 @@ export class PackingEngineService {
           let timer = null;
           if (isLiveRuntime && typeof AbortController !== "undefined") {
             controller = new AbortController();
-            timer = setTimeout(() => controller.abort(), 8500);
+            timer = setTimeout(() => controller.abort(), 6500);
           }
           let resp;
           try {
@@ -319,17 +377,20 @@ export class PackingEngineService {
           }
           if (!resp.ok) {
             const status = Number(resp.status) || 0;
-            // If a model rejects nested responseSchema with 400, retry immediately with plain JSON mode
+            // If a model rejects nested responseSchema with 400, retry immediately with plain JSON mode (do not count against attempt or call cap)
             if (status === 400 && currentBody?.generationConfig?.responseSchema) {
               const { responseSchema, ...restGenConfig } = currentBody.generationConfig;
               currentBody = {
                 ...currentBody,
                 generationConfig: { ...restGenConfig, responseMimeType: "application/json" },
               };
+              totalNetworkCalls = Math.max(0, totalNetworkCalls - 1);
+              attempt--;
               continue;
             }
-            // 404 (model not found) or 403/401 -> immediately move to next model in cascade
+            // 404 (model not found) or 403/401 -> immediately move to next model in cascade without penalizing call cap
             if (status === 404 || status === 401 || status === 403) {
+              if (status === 404) totalNetworkCalls = Math.max(0, totalNetworkCalls - 1);
               break;
             }
             // Retry on transient 429 / 5xx / 408 before failing over to next model
@@ -340,12 +401,11 @@ export class PackingEngineService {
             break;
           }
           const data = await resp.json();
-          const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          const validJson = PackingEngineService.extractCleanJson(rawText);
+          const validJson = PackingEngineService.extractCandidateJson(data);
           if (validJson) {
-            // Normalize the text part to the clean JSON string so callers can parse safely
-            if (data?.candidates?.[0]?.content?.parts?.[0]) {
-              data.candidates[0].content.parts[0].text = validJson;
+            // Normalize parts[0].text to the extracted clean JSON string so callers can parse safely
+            if (data?.candidates?.[0]?.content) {
+              data.candidates[0].content.parts = [{ text: validJson }];
             }
             PackingEngineService._lastWorkingModel = modelId;
             return { data, modelUsed: modelId, attemptsOnModel: attempt + 1 };
@@ -354,7 +414,11 @@ export class PackingEngineService {
           if (attempt < effectiveMaxRetries) {
             await sleep(baseDelay * (attempt + 1));
           }
-        } catch (_) {
+        } catch (err) {
+          // If a model timed out (AbortError) in live runtime, immediately fail over to the next model in the cascade
+          if (isLiveRuntime && err && err.name === "AbortError") {
+            break;
+          }
           if (attempt < effectiveMaxRetries) {
             await sleep(baseDelay * (attempt + 1));
           }
@@ -788,12 +852,27 @@ export class PackingEngineService {
     responseData,
     { existingNames = new Set(), city = "destination", allowedCategories = null, suppressPlug = false } = {}
   ) {
-    const rawText = responseData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const start = rawText.indexOf("[");
-    const end = rawText.lastIndexOf("]");
-    if (start === -1 || end <= start) return [];
+    const cleanJson =
+      PackingEngineService.extractCandidateJson(responseData) ||
+      PackingEngineService.extractCleanJson(responseData?.candidates?.[0]?.content?.parts?.[0]?.text || "");
+    if (!cleanJson) return [];
 
-    const arr = JSON.parse(rawText.slice(start, end + 1));
+    let arr = null;
+    try {
+      const parsed = JSON.parse(cleanJson);
+      if (Array.isArray(parsed)) {
+        arr = parsed;
+      } else if (parsed && typeof parsed === "object") {
+        arr =
+          parsed.suggestedItems ||
+          parsed.suggested_items ||
+          parsed.suggestions ||
+          parsed.items ||
+          (parsed.name ? [parsed] : null);
+      }
+    } catch (_) {
+      return [];
+    }
     if (!Array.isArray(arr)) return [];
 
     const validCategories = new Set(
@@ -808,7 +887,7 @@ export class PackingEngineService {
 
     for (const obj of arr) {
       if (!obj || typeof obj !== "object") continue;
-      const name = String(obj.name || "").trim();
+      const name = String(obj.name || obj.item || "").trim();
       if (!name) continue;
       const key = name.toLowerCase();
       if (suppressPlug && (key.includes("adapter") || key.includes("plug converter"))) continue;
@@ -819,7 +898,7 @@ export class PackingEngineService {
       const category = validCategories.has(rawCat.toLowerCase())
         ? canonicalMap.get(rawCat.toLowerCase())
         : "Others";
-      const rawBag = String(obj.bagLocation || "Carry-On").trim();
+      const rawBag = String(obj.bagLocation || obj.bag || "Carry-On").trim();
       const bagLocation = validBags.has(rawBag) ? rawBag : "Carry-On";
       const quantity = Math.max(1, Math.min(30, parseInt(obj.quantity, 10) || 1));
       const rawReason = String(obj.reason || `Suggested for ${city} weather`)
@@ -842,11 +921,11 @@ export class PackingEngineService {
   }
 
   /**
-   * Calls Gemini (`gemini-2.5-flash`) with the day-by-day forecast, destination, and vehicle mode
+   * Calls Gemini with the day-by-day forecast, destination, and vehicle mode
    * to generate dynamic suggested items (tagged with `[SUGGESTED] `) that appear at the end of the checklist.
    * Falls back to a day-by-day forecast analyzer if no API key is configured.
    */
-  static async generateGeminiSuggestions({ weather, durationDays, tags = [], templateItems = [], geminiApiKey = "" }) {
+  static async generateGeminiSuggestions({ weather, durationDays, tags = [], templateItems = [], geminiApiKey = "", fetchImpl = fetch }) {
     const existingNames = new Set((templateItems || []).map((i) => String(i.name || "").trim().toLowerCase()));
     const tagSet = new Set((tags || []).map((t) => String(t).toLowerCase().trim()));
     const isPersonalCar = tagSet.has("own_car") || tagSet.has("personal_car");
@@ -863,7 +942,7 @@ export class PackingEngineService {
           templateItems,
         });
 
-        const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey);
+        const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey, { fetchImpl });
         if (cascadeResult?.data) {
           const suggestions = PackingEngineService.parseGeminiSuggestionResponse(cascadeResult.data, {
             existingNames,
@@ -1020,7 +1099,25 @@ export class PackingEngineService {
           ? weather.dailyBreakdown.map((d) => `  - ${d}`).join("\n")
           : `  - Average ${Math.round(weather?.avgLowF ?? 52)}°F low to ${Math.round(weather?.avgHighF ?? 68)}°F high, ${weather?.rainyDaysCount ?? 0} rainy day(s)`;
 
-        const rulesLines = (customRules || [])
+        const isUnconditionalAlwaysRule = (r) => {
+          const cond = String(r?.moduleKey || "Always").trim().toLowerCase();
+          const hasEmbeddedCond = /\b(if|when|only|unless)\b/i.test(String(r?.name || ""));
+          return (!cond || cond === "always") && !hasEmbeddedCond;
+        };
+
+        const conditionalRules = (customRules || []).filter((r) => !isUnconditionalAlwaysRule(r));
+        const rulesToEvaluate = conditionalRules.length > 0 ? conditionalRules : customRules || [];
+        const alwaysBaseNames = (fallbackTemplateItems || [])
+          .filter((fb) => {
+            const rule = (customRules || []).find(
+              (r) => String(r?.name || "").trim().toLowerCase() === String(fb?.name || "").trim().toLowerCase()
+            );
+            return !rule || isUnconditionalAlwaysRule(rule);
+          })
+          .map((fb) => `${fb.name} (x${fb.quantity})`)
+          .join(", ");
+
+        const rulesLines = rulesToEvaluate
           .map((r) => {
             const scaleDesc = r.scaleByDays
               ? `scale_by_days=true (ratio=${r.ratioPerDay || 1}/day, effectiveDays=${effectiveDays})`
@@ -1032,13 +1129,13 @@ export class PackingEngineService {
         const prompt = [
           "You are PackTrack's intelligent packing rule evaluator and weather advisor.",
           "",
-          "TASK 1 (`templateItems` — Evaluate User's Default Template Rules):",
-          "Evaluate EVERY item in the user's Default Template below against the TRIP DETAILS and DAY-BY-DAY WEATHER FORECAST.",
+          "TASK 1 (`templateItems` — Evaluate User's Conditional Template Rules):",
+          "Evaluate each item in USER'S TEMPLATE RULES below against the TRIP DETAILS and DAY-BY-DAY WEATHER FORECAST.",
           '- Include an item in `templateItems` IF AND ONLY IF its `Condition` is satisfied for this trip (e.g., "Always" is always included; "Only when working" or "if work is expected to be done" is included only when Purpose is Work; complex natural-language conditions like "Only add this when there is at least one rainy day and if trip is for more than 5 days and only when we go to India" are included only when ALL parts of that condition hold true for this trip).',
           "- If `scale_by_days=true`, compute `quantity = ceil(effectiveDays * ratio)`. Otherwise `quantity = 1`. Keep `reason` concise (max 8 words) for templateItems.",
           "",
           "TASK 2 (`suggestedItems` — Dynamic Weather & Trip Suggestions):",
-          `Suggest 2 to 5 additional practical items or preparations tailored to the day-by-day forecast, destination, and vehicle mode that are NOT already in \`templateItems\` (e.g., raincoat/umbrella citing rainy days, snow tires/ice scraper if freezing/snowing while driving, sun hat/sunscreen on high-UV/hot days, windbreaker on windy days${showPlug ? `, or ${weather?.plugTypes} power adapter` : "; do NOT suggest a power/plug adapter for USA or India trips"}).`,
+          `Suggest 2 to 5 additional practical items or preparations tailored to the day-by-day forecast, destination, and vehicle mode that are NOT already in \`templateItems\` or BASE ITEMS ALREADY PACKED (e.g., raincoat/umbrella citing rainy days, snow tires/ice scraper if freezing/snowing while driving, sun hat/sunscreen on high-UV/hot days, windbreaker on windy days${showPlug ? `, or ${weather?.plugTypes} power adapter` : "; do NOT suggest a power/plug adapter for USA or India trips"}).`,
           "",
           "TRIP DETAILS:",
           `- Destination City: ${weather?.city}`,
@@ -1050,8 +1147,13 @@ export class PackingEngineService {
           `DAY-BY-DAY WEATHER FORECAST (Avg Low: ${Math.round(weather?.avgLowF ?? 52)}°F, Avg High: ${Math.round(weather?.avgHighF ?? 68)}°F, Rainy Days: ${weather?.rainyDaysCount ?? 0}):`,
           dailyLines,
           "",
-          "USER'S DEFAULT TEMPLATE RULES:",
+          `BASE ITEMS ALREADY PACKED (DO NOT DUPLICATE IN suggestedItems): ${alwaysBaseNames || "None"}`,
+          "",
+          "USER'S TEMPLATE RULES TO EVALUATE FOR `templateItems`:",
           rulesLines || "  None",
+          "",
+          "Return ONLY a valid JSON object matching this exact schema:",
+          '{"templateItems":[{"name":"...","category":"On Me|Docs|Electronics|Clothes|Toiletry|Others","quantity":1,"bagLocation":"Personal|Carry-On|Check-In","reason":"..."}],"suggestedItems":[{"name":"...","category":"On Me|Docs|Electronics|Clothes|Toiletry|Others","quantity":1,"bagLocation":"Personal|Carry-On|Check-In","reason":"..."}]}',
         ].join("\n");
 
         const allowedCategories = PackingEngineService.buildAllowedCategories(
@@ -1095,17 +1197,45 @@ export class PackingEngineService {
         const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey, { fetchImpl });
         if (cascadeResult?.data) {
           const data = cascadeResult.data;
-          const rawText = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-          const cleanJson = PackingEngineService.extractCleanJson(rawText) || rawText;
-          const parsedRoot = JSON.parse(cleanJson);
-          if (parsedRoot && Array.isArray(parsedRoot.templateItems)) {
+          const cleanJson =
+            PackingEngineService.extractCandidateJson(data) ||
+            PackingEngineService.extractCleanJson(data?.candidates?.[0]?.content?.parts?.[0]?.text || "");
+          const parsedRoot = cleanJson ? JSON.parse(cleanJson) : null;
+          if (parsedRoot && typeof parsedRoot === "object") {
             const ruleByLowerName = new Map(
               (customRules || []).map((r) => [String(r.name || "").trim().toLowerCase(), r])
             );
+            const rawTemplateList = Array.isArray(parsedRoot.templateItems)
+              ? parsedRoot.templateItems
+              : Array.isArray(parsedRoot.template_items)
+              ? parsedRoot.template_items
+              : [];
+            const rawSuggestedList = Array.isArray(parsedRoot)
+              ? parsedRoot
+              : Array.isArray(parsedRoot.suggestedItems)
+              ? parsedRoot.suggestedItems
+              : Array.isArray(parsedRoot.suggested_items)
+              ? parsedRoot.suggested_items
+              : Array.isArray(parsedRoot.suggestions)
+              ? parsedRoot.suggestions
+              : [];
+
             const seen = new Set();
             const templateItems = [];
-            for (const obj of parsedRoot.templateItems) {
-              const name = String(obj?.name || "").trim();
+
+            // 1. Preserve all unconditional "Always" rules in template order
+            for (const fb of fallbackTemplateItems) {
+              const key = String(fb.name || "").trim().toLowerCase();
+              const rule = ruleByLowerName.get(key);
+              if ((!rule || isUnconditionalAlwaysRule(rule)) && !seen.has(key)) {
+                seen.add(key);
+                templateItems.push(fb);
+              }
+            }
+
+            // 2. Add Gemini-evaluated conditional template items
+            for (const obj of rawTemplateList) {
+              const name = String(obj?.name || obj?.item || "").trim();
               if (!name) continue;
               const key = name.toLowerCase();
               if (seen.has(key)) continue;
@@ -1115,7 +1245,7 @@ export class PackingEngineService {
                 name: matchedRule?.name || name,
                 category: obj?.category || matchedRule?.category || "Others",
                 quantity: Math.max(1, Math.min(30, parseInt(obj?.quantity, 10) || 1)),
-                bagLocation: obj?.bagLocation || matchedRule?.bagLocation || "Carry-On",
+                bagLocation: obj?.bagLocation || obj?.bag || matchedRule?.bagLocation || "Carry-On",
                 packedOutbound: false,
                 packedReturn: false,
                 isDoorwayCritical: Boolean(matchedRule?.isDoorwayCritical),
@@ -1124,20 +1254,14 @@ export class PackingEngineService {
               });
             }
 
-            // Ensure any "Always" rules are preserved
-            for (const fb of fallbackTemplateItems) {
-              const key = String(fb.name || "").trim().toLowerCase();
-              const rule = ruleByLowerName.get(key);
-              const cond = String(rule?.moduleKey || "Always").trim().toLowerCase();
-              if ((!cond || cond === "always") && !seen.has(key)) {
-                seen.add(key);
-                templateItems.push(fb);
-              }
+            const finalTemplateItems = templateItems.length > 0 ? templateItems : fallbackTemplateItems;
+            for (const item of finalTemplateItems) {
+              seen.add(String(item.name || "").trim().toLowerCase());
             }
 
             const suggestedItems = [];
-            for (const obj of parsedRoot.suggestedItems || []) {
-              const name = String(obj?.name || "").trim();
+            for (const obj of rawSuggestedList) {
+              const name = String(obj?.name || obj?.item || "").trim();
               if (!name) continue;
               const key = name.toLowerCase();
               if (suppressPlug && (key.includes("adapter") || key.includes("plug converter"))) continue;
@@ -1150,7 +1274,7 @@ export class PackingEngineService {
                 name,
                 category: obj?.category || "Others",
                 quantity: Math.max(1, Math.min(30, parseInt(obj?.quantity, 10) || 1)),
-                bagLocation: obj?.bagLocation || "Carry-On",
+                bagLocation: obj?.bagLocation || obj?.bag || "Carry-On",
                 packedOutbound: false,
                 packedReturn: false,
                 isDoorwayCritical: false,
@@ -1159,19 +1283,18 @@ export class PackingEngineService {
               });
             }
 
-            if (templateItems.length > 0) {
-              const finalSuggested =
-                suggestedItems.length > 0
-                  ? suggestedItems
-                  : await PackingEngineService.generateGeminiSuggestions({
-                      weather,
-                      durationDays,
-                      tags,
-                      templateItems,
-                      geminiApiKey,
-                    });
-              return { templateItems, suggestedItems: finalSuggested, usedFallback: false };
-            }
+            const finalSuggested =
+              suggestedItems.length > 0
+                ? suggestedItems
+                : await PackingEngineService.generateGeminiSuggestions({
+                    weather,
+                    durationDays,
+                    tags,
+                    templateItems: finalTemplateItems,
+                    geminiApiKey,
+                    fetchImpl,
+                  });
+            return { templateItems: finalTemplateItems, suggestedItems: finalSuggested, usedFallback: false };
           }
         }
       } catch (_) {
@@ -1245,6 +1368,7 @@ export class PackingEngineService {
     return {
       destination: weather.city,
       country: weather.country,
+      countryCode: weather.countryCode || "",
       startDate: cleanStart,
       endDate: cleanEnd,
       durationDays: daysNum,
@@ -1260,7 +1384,7 @@ export class PackingEngineService {
     };
   }
 
-  static async handleNaturalLanguageCommand(text, state, activeTripIndex = 0) {
+  static async handleNaturalLanguageCommand(text, state, activeTripIndex = 0, geminiApiKey = "") {
     const raw = String(text || "").trim();
     const lower = raw.toLowerCase();
 
@@ -1340,6 +1464,7 @@ export class PackingEngineService {
       durationDays,
       tags,
       customRules: state.custom_rules,
+      geminiApiKey,
     });
     state.trips.unshift(newTrip);
 

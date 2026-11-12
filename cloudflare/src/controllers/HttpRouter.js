@@ -171,7 +171,7 @@ export class HttpRouter {
   constructor(env) {
     this.env = env;
     this.repo = new FirestoreRepository(env);
-    this.mcp = new McpRouter(this.repo);
+    this.mcp = new McpRouter(this.repo, this.env);
   }
 
   _getGoogleClientId() {
@@ -488,6 +488,9 @@ export class HttpRouter {
           geminiApiKey: body.geminiApiKey || this.env?.GEMINI_API_KEY || "",
         });
         recreated.tripMode = body.tripMode || existing.tripMode || "OUTBOUND";
+        const recreatedNames = new Set(
+          (recreated.items || []).map((it) => String(it.name || "").trim().toLowerCase())
+        );
         recreated.items = (recreated.items || []).map((item) => {
           const prev = prevMap.get(String(item.name || "").trim().toLowerCase());
           if (prev) {
@@ -499,6 +502,19 @@ export class HttpRouter {
           }
           return item;
         });
+        for (const [key, prev] of prevMap.entries()) {
+          if (recreatedNames.has(key)) continue;
+          const reason = String(prev.weatherReason || "");
+          if (
+            reason === "Custom item" ||
+            reason === "Added on the fly" ||
+            reason === "Added via voice" ||
+            reason.startsWith("✨ ")
+          ) {
+            recreated.items.push(prev);
+            recreatedNames.add(key);
+          }
+        }
         state.trips[targetIdx] = recreated;
         await this.repo.saveUserState(userId, state);
         return this.json(state, 200);
@@ -509,7 +525,8 @@ export class HttpRouter {
         const res = await PackingEngineService.handleNaturalLanguageCommand(
           body.text || "",
           state,
-          body.activeTripIndex || 0
+          body.activeTripIndex || 0,
+          body.geminiApiKey || this.env?.GEMINI_API_KEY || ""
         );
         await this.repo.saveUserState(userId, res.state);
         return this.json(res);
