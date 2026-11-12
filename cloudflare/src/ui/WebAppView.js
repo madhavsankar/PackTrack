@@ -1111,7 +1111,9 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       handleNavButtonClick() {
-        if (this.currentScreen === "home") {
+        if (this.isDrawerOpen()) {
+          this.closeDrawer();
+        } else if (this.currentScreen === "home") {
           this.openDrawer();
         } else if (this.currentScreen === "interview") {
           this.stepBackInterview();

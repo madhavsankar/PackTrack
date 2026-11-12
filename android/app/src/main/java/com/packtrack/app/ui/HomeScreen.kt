@@ -356,10 +356,14 @@ fun HomeScreen(
                         titleContentColor = MaterialTheme.colorScheme.onBackground
                     ),
                     navigationIcon = {
-                        IconButton(onClick = { scope.launch { drawerState.open() } }) {
+                        IconButton(onClick = {
+                            scope.launch {
+                                if (drawerState.isOpen) drawerState.close() else drawerState.open()
+                            }
+                        }) {
                             Icon(
                                 imageVector = Icons.Outlined.Menu,
-                                contentDescription = "Open Menu",
+                                contentDescription = "Toggle Menu",
                                 tint = MaterialTheme.colorScheme.onBackground
                             )
                         }
