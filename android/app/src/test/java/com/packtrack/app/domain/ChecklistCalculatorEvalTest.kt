@@ -511,6 +511,7 @@ class ChecklistCalculatorEvalTest {
         assertTrue("TripChecklistScreen must use FlowRow for responsive header badges", tripChecklistText.contains("FlowRow("))
         assertTrue("TripChecklistScreen top bar must display formatted date range alongside duration days", tripChecklistText.contains("formatDateRange("))
         assertTrue("TripChecklistScreen Recreate dialog must pre-populate and pass editable trip details", tripChecklistText.contains("parseTripTags(") && tripChecklistText.contains("newCarMode = editCarMode"))
+        assertTrue("TripChecklistScreen must open Edit Item dialog on long-press and keep Doorway removal independent of Pack", tripChecklistText.contains("onLongClick = {\n                                        itemBeingEdited = item") && tripChecklistText.contains("setItemDoorwayCritical("))
         assertTrue("ChecklistScreen must persist active_user_id and restore GoogleSignIn across app restarts", checklistScreenText.contains("active_user_id") && checklistScreenText.contains("getLastSignedInAccount"))
     }
 }

@@ -328,6 +328,8 @@ class GeminiVoiceAssistant(
     ): String = withContext(Dispatchers.IO) {
         val trip = dao.getTripById(tripId) ?: return@withContext "Trip not found."
         val cleanUser = FirestoreSyncService.sanitizeUserId(currentUserId)
+        // Snapshot local items before pulling from Firestore so any checkmarks just toggled on-device are never lost
+        val localItemsBeforeSync = dao.getItemsForTrip(tripId)
         FirestoreSyncService.pullFromFirestoreIfNeeded(dao, cleanUser)
 
         val parsedTags = com.packtrack.app.domain.TripDateUtils.parseTripTags(trip.tagsCsv)
@@ -365,10 +367,22 @@ class GeminiVoiceAssistant(
             isInternational = forecast.isInternational
         )
 
-        val existingItems = dao.getItemsForTrip(tripId)
-        val existingActiveByLowerName = existingItems
-            .filter { !ChecklistCalculator.isSuggested(it) }
-            .associateBy { it.name.trim().lowercase() }
+        val existingItemsAfterSync = dao.getItemsForTrip(tripId)
+        val existingActiveByLowerName = mutableMapOf<String, PackingItemEntity>()
+        for (item in (existingItemsAfterSync + localItemsBeforeSync)) {
+            if (!ChecklistCalculator.isSuggested(item)) {
+                val key = item.name.trim().lowercase()
+                val prev = existingActiveByLowerName[key]
+                existingActiveByLowerName[key] = if (prev != null) {
+                    item.copy(
+                        packedOutbound = prev.packedOutbound || item.packedOutbound,
+                        packedReturn = prev.packedReturn || item.packedReturn
+                    )
+                } else {
+                    item
+                }
+            }
+        }
 
         val customRules = dao.getTemplateRulesForUser(cleanUser)
         val (rawTemplateItems, suggestedItems, usedFallback) = evaluateTemplateAndSuggestWithGemini(
@@ -1042,16 +1056,25 @@ class GeminiVoiceAssistant(
         val plainJsonBytes = buildPayloadBytes(includeSchema = false)
         val primaryCascade = resolveModelCascade()
         val fullCascade = primaryCascade + EMERGENCY_LAST_RESORT_MODELS.filterNot { it in primaryCascade }
+        val startedAtMs = System.currentTimeMillis()
+        val maxTotalWallMs = 16_000L
+        val maxTotalCalls = 7
+        var totalCalls = 0
 
-        for (modelId in fullCascade) {
+        for ((mIdx, modelId) in fullCascade.withIndex()) {
             var useSchema = true
-            for (attempt in 0..maxRetriesPerModel) {
+            val effectiveMaxRetries = if (mIdx >= 2) minOf(1, maxRetriesPerModel) else maxRetriesPerModel
+            for (attempt in 0..effectiveMaxRetries) {
+                if (totalCalls >= maxTotalCalls || System.currentTimeMillis() - startedAtMs > maxTotalWallMs) {
+                    break
+                }
+                totalCalls++
                 try {
                     val conn = (URL("$MODELS_BASE_URL/$modelId:generateContent?key=$geminiApiKey").openConnection() as HttpURLConnection).apply {
                         requestMethod = "POST"
                         setRequestProperty("Content-Type", "application/json")
-                        connectTimeout = 10000
-                        readTimeout = 25000
+                        connectTimeout = 6000
+                        readTimeout = 9000
                         doOutput = true
                     }
                     conn.outputStream.use { it.write(if (useSchema) schemaBytes else plainJsonBytes) }
@@ -1067,8 +1090,8 @@ class GeminiVoiceAssistant(
                             break
                         }
                         // Transient 429 / 5xx / 408 -> backoff and retry on this model before failing over
-                        if (attempt < maxRetriesPerModel) {
-                            Thread.sleep(350L * (attempt + 1))
+                        if (attempt < effectiveMaxRetries) {
+                            Thread.sleep(250L * (attempt + 1))
                             continue
                         }
                         break
@@ -1086,13 +1109,13 @@ class GeminiVoiceAssistant(
                         lastWorkingModel = modelId
                         return cleanJson
                     }
-                    if (attempt < maxRetriesPerModel) {
-                        Thread.sleep(350L * (attempt + 1))
+                    if (attempt < effectiveMaxRetries) {
+                        Thread.sleep(250L * (attempt + 1))
                     }
                 } catch (_: Exception) {
-                    if (attempt < maxRetriesPerModel) {
+                    if (attempt < effectiveMaxRetries) {
                         try {
-                            Thread.sleep(350L * (attempt + 1))
+                            Thread.sleep(250L * (attempt + 1))
                         } catch (_: Exception) {
                         }
                     }

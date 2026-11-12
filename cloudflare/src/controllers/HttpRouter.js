@@ -445,15 +445,27 @@ export class HttpRouter {
 
       if (path === "/api/trips/recreate") {
         const state = await this.repo.getUserState(userId);
-        const idx = Number(body.tripIndex) || 0;
-        const existing = state.trips?.[idx];
+        const idx = Number.isInteger(Number(body.tripIndex)) ? Number(body.tripIndex) : 0;
+        const existing = state.trips?.[idx] || state.trips?.[0];
         if (!existing) {
           return this.json({ error: "Trip not found" }, 404);
         }
+        const targetIdx = state.trips?.[idx] ? idx : 0;
         const prevMap = new Map();
-        for (const it of existing.items || []) {
-          if (!String(it.weatherReason || "").startsWith("[SUGGESTED] ")) {
-            prevMap.set(String(it.name || "").trim().toLowerCase(), it);
+        const combinedExistingItems = [
+          ...(existing.items || []),
+          ...(Array.isArray(body.existingItems) ? body.existingItems : []),
+        ];
+        for (const it of combinedExistingItems) {
+          if (!String(it?.weatherReason || "").startsWith("[SUGGESTED] ")) {
+            const key = String(it?.name || "").trim().toLowerCase();
+            if (!key) continue;
+            const prev = prevMap.get(key);
+            prevMap.set(key, {
+              ...it,
+              packedOutbound: Boolean(prev?.packedOutbound || it?.packedOutbound),
+              packedReturn: Boolean(prev?.packedReturn || it?.packedReturn),
+            });
           }
         }
         const tags =
@@ -475,7 +487,7 @@ export class HttpRouter {
           customRules: state.custom_rules,
           geminiApiKey: body.geminiApiKey || this.env?.GEMINI_API_KEY || "",
         });
-        recreated.tripMode = existing.tripMode || "OUTBOUND";
+        recreated.tripMode = body.tripMode || existing.tripMode || "OUTBOUND";
         recreated.items = (recreated.items || []).map((item) => {
           const prev = prevMap.get(String(item.name || "").trim().toLowerCase());
           if (prev) {
@@ -487,7 +499,7 @@ export class HttpRouter {
           }
           return item;
         });
-        state.trips[idx] = recreated;
+        state.trips[targetIdx] = recreated;
         await this.repo.saveUserState(userId, state);
         return this.json(state, 200);
       }

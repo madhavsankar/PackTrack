@@ -359,7 +359,7 @@ fun TripChecklistScreen(
                                         }
                                     },
                                     onLongClick = {
-                                        longPressedItem = item
+                                        itemBeingEdited = item
                                     }
                                 )
                         ) {
@@ -623,10 +623,19 @@ fun TripChecklistScreen(
 
                 Surface(
                     onClick = {
-                        val idToRemove = item.id
+                        val target = item
                         longPressedItem = null
                         scope.launch {
-                            dao.deleteItem(idToRemove)
+                            if (currentMode == TripMode.DOORWAY) {
+                                dao.setItemDoorwayCritical(target.id, false)
+                                Toast.makeText(
+                                    context,
+                                    "Removed '${target.name}' from Doorway check (kept in Pack)",
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            } else {
+                                dao.deleteItem(target.id)
+                            }
                             FirestoreSyncService.pushLocalStateToFirestore(dao, currentUserId)
                         }
                     },
@@ -645,7 +654,7 @@ fun TripChecklistScreen(
                             tint = MaterialTheme.colorScheme.error
                         )
                         Text(
-                            "Remove from Trip",
+                            if (currentMode == TripMode.DOORWAY) "Remove from Doorway Check (Keep in Pack)" else "Remove from Trip",
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.error
                         )
@@ -657,36 +666,184 @@ fun TripChecklistScreen(
         }
     }
 
-    // Edit Item Dialog
+    // Edit Item Dialog (Opened directly on Long-Press or tapping Quantity Pill)
     itemBeingEdited?.let { item ->
         var editName by remember(item) { mutableStateOf(item.name) }
         var editQty by remember(item) { mutableStateOf(item.quantity.toString()) }
-        var editBag by remember(item) { mutableStateOf(item.bagLocation) }
+        var editCategory by remember(item) { mutableStateOf(item.category) }
+        var editBag by remember(item) { mutableStateOf(BagLocation.fromLabel(item.bagLocation).label) }
+        var editDoorway by remember(item) { mutableStateOf(item.isDoorwayCritical) }
+        val allCats = remember(items) {
+            com.packtrack.app.ui.theme.PackTrackThemeState.allCategories(items.map { it.category })
+        }
 
         AlertDialog(
             onDismissRequest = { itemBeingEdited = null },
             containerColor = MaterialTheme.colorScheme.surface,
-            title = { Text("Edit Item") },
+            title = { Text("Edit Checklist Item") },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
                     OutlinedTextField(
                         value = editName,
                         onValueChange = { editName = it },
                         label = { Text("Item Name") },
-                        singleLine = true
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
                     OutlinedTextField(
                         value = editQty,
                         onValueChange = { editQty = it },
                         label = { Text("Quantity") },
-                        singleLine = true
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
                     )
-                    OutlinedTextField(
-                        value = editBag,
-                        onValueChange = { editBag = it },
-                        label = { Text("Bag Location") },
-                        singleLine = true
+
+                    Text(
+                        text = "BAG LOCATION",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
                     )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        BagLocation.selectableEntries.forEach { bagOpt ->
+                            val selected = editBag.equals(bagOpt.label, ignoreCase = true)
+                            Surface(
+                                onClick = { editBag = bagOpt.label },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                ),
+                                modifier = Modifier.weight(1f)
+                            ) {
+                                Box(
+                                    modifier = Modifier.padding(vertical = 8.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = bagOpt.label,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = if (selected) MaterialTheme.colorScheme.primary
+                                        else MaterialTheme.colorScheme.onSurface
+                                    )
+                                }
+                            }
+                        }
+                    }
+
+                    Text(
+                        text = "CATEGORY",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        allCats.forEach { cat ->
+                            val selected = editCategory.equals(cat, ignoreCase = true)
+                            Surface(
+                                onClick = { editCategory = cat },
+                                shape = RoundedCornerShape(8.dp),
+                                color = if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.16f)
+                                else MaterialTheme.colorScheme.surfaceVariant,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                                )
+                            ) {
+                                Text(
+                                    text = cat,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Checkbox(
+                            checked = editDoorway,
+                            onCheckedChange = { editDoorway = it }
+                        )
+                        Text(
+                            text = "Include in 60-Second Doorway Check",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = {
+                                val target = item.copy(
+                                    name = editName.trim().ifEmpty { item.name },
+                                    category = editCategory,
+                                    bagLocation = editBag,
+                                    isDoorwayCritical = editDoorway
+                                )
+                                itemBeingEdited = null
+                                itemSavingToTemplate = target
+                            },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Star,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text("Save to Template", style = MaterialTheme.typography.labelSmall)
+                        }
+
+                        OutlinedButton(
+                            onClick = {
+                                val target = item
+                                itemBeingEdited = null
+                                scope.launch {
+                                    if (currentMode == TripMode.DOORWAY) {
+                                        dao.setItemDoorwayCritical(target.id, false)
+                                        Toast.makeText(
+                                            context,
+                                            "Removed '${target.name}' from Doorway check (kept in Pack)",
+                                            Toast.LENGTH_SHORT
+                                        ).show()
+                                    } else {
+                                        dao.deleteItem(target.id)
+                                    }
+                                    FirestoreSyncService.pushLocalStateToFirestore(dao, currentUserId)
+                                }
+                            },
+                            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Delete,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp)
+                            )
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(
+                                if (currentMode == TripMode.DOORWAY) "Doorway" else "Remove",
+                                style = MaterialTheme.typography.labelSmall
+                            )
+                        }
+                    }
                 }
             },
             confirmButton = {
@@ -695,9 +852,10 @@ fun TripChecklistScreen(
                         val qty = editQty.toIntOrNull()?.coerceAtLeast(1) ?: item.quantity
                         val cleanName = editName.trim().ifEmpty { item.name }
                         val cleanBag = editBag.trim().ifEmpty { item.bagLocation }
+                        val cleanCat = editCategory.trim().ifEmpty { item.category }
                         itemBeingEdited = null
                         scope.launch {
-                            dao.updateItemDetails(item.id, cleanName, qty, item.category, cleanBag)
+                            dao.updateItemDetails(item.id, cleanName, qty, cleanCat, cleanBag, editDoorway)
                             FirestoreSyncService.pushLocalStateToFirestore(dao, currentUserId)
                         }
                     }
@@ -986,17 +1144,20 @@ fun TripChecklistScreen(
                         showRecreateConfirmDialog = false
                         isRefreshingWeather = true
                         scope.launch {
-                            val summary = voiceAssistant.recreateTripChecklist(
-                                tripId = tripId,
-                                newStartDate = editStartDate,
-                                newEndDate = editEndDate,
-                                newDays = editDays,
-                                newIsWork = editIsWork,
-                                newCarMode = editCarMode,
-                                newLuggageSpace = editLuggageSpace
-                            )
-                            isRefreshingWeather = false
-                            Toast.makeText(context, summary, Toast.LENGTH_SHORT).show()
+                            try {
+                                val summary = voiceAssistant.recreateTripChecklist(
+                                    tripId = tripId,
+                                    newStartDate = editStartDate,
+                                    newEndDate = editEndDate,
+                                    newDays = editDays,
+                                    newIsWork = editIsWork,
+                                    newCarMode = editCarMode,
+                                    newLuggageSpace = editLuggageSpace
+                                )
+                                Toast.makeText(context, summary, Toast.LENGTH_SHORT).show()
+                            } finally {
+                                isRefreshingWeather = false
+                            }
                         }
                     }
                 ) {
@@ -1024,7 +1185,8 @@ fun TripChecklistScreen(
                             name = name,
                             category = category,
                             quantity = 1,
-                            isDoorwayCritical = category.equals(PackingCategory.ON_ME.displayName, ignoreCase = true) ||
+                            isDoorwayCritical = currentMode == TripMode.DOORWAY ||
+                                category.equals(PackingCategory.ON_ME.displayName, ignoreCase = true) ||
                                 category.equals(PackingCategory.DOCS.displayName, ignoreCase = true),
                             isHighLossReturn = true,
                             weatherReason = "Added manually"

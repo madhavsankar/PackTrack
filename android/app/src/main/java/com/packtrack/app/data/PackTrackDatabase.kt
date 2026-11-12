@@ -105,8 +105,18 @@ interface PackTrackDao {
     @Query("UPDATE packing_items SET quantity = :qty, weatherReason = :reason WHERE id = :itemId")
     suspend fun updateItemQuantity(itemId: Long, qty: Int, reason: String)
 
-    @Query("UPDATE packing_items SET name = :name, quantity = :qty, category = :category, bagLocation = :bagLocation WHERE id = :itemId")
-    suspend fun updateItemDetails(itemId: Long, name: String, qty: Int, category: String, bagLocation: String)
+    @Query("UPDATE packing_items SET name = :name, quantity = :qty, category = :category, bagLocation = :bagLocation, isDoorwayCritical = :isDoorwayCritical WHERE id = :itemId")
+    suspend fun updateItemDetails(
+        itemId: Long,
+        name: String,
+        qty: Int,
+        category: String,
+        bagLocation: String,
+        isDoorwayCritical: Boolean = false
+    )
+
+    @Query("UPDATE packing_items SET isDoorwayCritical = :critical WHERE id = :itemId")
+    suspend fun setItemDoorwayCritical(itemId: Long, critical: Boolean)
 
     @Query("DELETE FROM packing_items WHERE id = :itemId")
     suspend fun deleteItem(itemId: Long)

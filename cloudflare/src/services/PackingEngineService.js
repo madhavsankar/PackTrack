@@ -274,25 +274,49 @@ export class PackingEngineService {
       ? primaryCascade
       : [...primaryCascade, ...PackingEngineService.EMERGENCY_LAST_RESORT_MODELS.filter((m) => !primaryCascade.includes(m))];
 
+    const isLiveRuntime = typeof fetch !== "undefined" && fetchImpl === fetch && !cascadeOverride;
     const baseDelay =
       typeof retryDelayMs === "number"
         ? retryDelayMs
-        : typeof fetch !== "undefined" && fetchImpl === fetch
-        ? 350
+        : isLiveRuntime
+        ? 250
         : 0;
 
     const sleep = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
+    const startedAt = Date.now();
+    const maxTotalNetworkCalls = isLiveRuntime ? 7 : 100;
+    const maxTotalWallMs = isLiveRuntime ? 16000 : 300000;
+    let totalNetworkCalls = 0;
 
-    for (const modelId of fullCascade) {
+    for (let mIdx = 0; mIdx < fullCascade.length; mIdx++) {
+      const modelId = fullCascade[mIdx];
       let currentBody = requestBody;
-      for (let attempt = 0; attempt <= maxRetriesPerModel; attempt++) {
+      // In live Cloudflare Worker runtime, retry top 2 models up to maxRetriesPerModel, and try remaining fallback models once to stay well within Worker subrequest/time limits
+      const effectiveMaxRetries = isLiveRuntime && mIdx >= 2 ? Math.min(1, maxRetriesPerModel) : maxRetriesPerModel;
+      for (let attempt = 0; attempt <= effectiveMaxRetries; attempt++) {
+        if (totalNetworkCalls >= maxTotalNetworkCalls || Date.now() - startedAt > maxTotalWallMs) {
+          return null;
+        }
+        totalNetworkCalls++;
         try {
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
-          const resp = await fetchImpl(url, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(currentBody),
-          });
+          let controller = null;
+          let timer = null;
+          if (isLiveRuntime && typeof AbortController !== "undefined") {
+            controller = new AbortController();
+            timer = setTimeout(() => controller.abort(), 8500);
+          }
+          let resp;
+          try {
+            resp = await fetchImpl(url, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(currentBody),
+              ...(controller ? { signal: controller.signal } : {}),
+            });
+          } finally {
+            if (timer) clearTimeout(timer);
+          }
           if (!resp.ok) {
             const status = Number(resp.status) || 0;
             // If a model rejects nested responseSchema with 400, retry immediately with plain JSON mode
@@ -309,7 +333,7 @@ export class PackingEngineService {
               break;
             }
             // Retry on transient 429 / 5xx / 408 before failing over to next model
-            if (attempt < maxRetriesPerModel) {
+            if (attempt < effectiveMaxRetries) {
               await sleep(baseDelay * (attempt + 1));
               continue;
             }
@@ -327,11 +351,11 @@ export class PackingEngineService {
             return { data, modelUsed: modelId, attemptsOnModel: attempt + 1 };
           }
           // Truncated or empty response -> retry before moving to next model
-          if (attempt < maxRetriesPerModel) {
+          if (attempt < effectiveMaxRetries) {
             await sleep(baseDelay * (attempt + 1));
           }
         } catch (_) {
-          if (attempt < maxRetriesPerModel) {
+          if (attempt < effectiveMaxRetries) {
             await sleep(baseDelay * (attempt + 1));
           }
         }

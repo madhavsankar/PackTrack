@@ -704,6 +704,10 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn('id="rt-luggage"', webapp_js)
         self.assertIn("onRecreateDateChange()", webapp_js)
         self.assertIn("onRecreateCarChange()", webapp_js)
+        self.assertIn('id="edit-item-modal"', webapp_js)
+        self.assertIn("openEditItemModal(", webapp_js)
+        self.assertIn("submitEditItem()", webapp_js)
+        self.assertIn("trip.tripMode === \"DOORWAY\"", webapp_js)
 
         # Verify 10-year (until explicit Sign Out) login session persistence in HttpRouter.js, WebAppView.js, and ChecklistScreen.kt
         router_path = os.path.join(root_dir, "cloudflare", "src", "controllers", "HttpRouter.js")
@@ -714,6 +718,7 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn("verifyWorkerSessionToken", router_js)
         self.assertIn("verifyGoogleJwtWithJwks", router_js)
         self.assertIn("Array.isArray(body.tags)", router_js)
+        self.assertIn("body.existingItems", router_js)
         self.assertIn("active_user_id", checklist_kt)
         self.assertIn("GoogleSignIn", checklist_kt)
         self.assertIn(".getLastSignedInAccount", checklist_kt)

@@ -416,6 +416,81 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
   </div>
 
   <!-- ========================================================= -->
+  <!-- MODAL: EDIT TRIP ITEM (Opened via Long-Press)             -->
+  <!-- ========================================================= -->
+  <div id="edit-item-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="surface-card rounded-2xl p-5 w-full max-w-sm space-y-3">
+      <div class="flex items-center justify-between">
+        <h3 class="text-sm font-bold text-white">Edit Checklist Item</h3>
+        <button type="button" onclick="app.closeModals()" class="text-slate-400 hover:text-white text-xs">✕</button>
+      </div>
+      <div>
+        <label class="text-[11px] font-semibold text-slate-400 uppercase">Item Name</label>
+        <input id="ei-name" type="text" placeholder="Item name" class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs" />
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <div>
+          <label class="text-[11px] font-semibold text-slate-400 uppercase">Quantity</label>
+          <input id="ei-qty" type="number" min="1" value="1" class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs" />
+        </div>
+        <div>
+          <label class="text-[11px] font-semibold text-slate-400 uppercase">Bag Location</label>
+          <select id="ei-bag" class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs">
+            <option value="Personal">Personal</option>
+            <option value="Carry-On">Carry-On</option>
+            <option value="Check-In">Check-In</option>
+          </select>
+        </div>
+      </div>
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between">
+          <label class="text-[11px] font-semibold text-slate-400 uppercase">Category</label>
+          <button type="button" onclick="app.toggleNewCategoryBox('ei')" class="text-[11px] font-semibold accent-text hover:underline">+ Add Category</button>
+        </div>
+        <select id="ei-cat" onchange="app.handleCategorySelectChange('ei')" class="w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs">
+          <option value="On Me">On Me</option>
+          <option value="Docs">Docs</option>
+          <option value="Electronics">Electronics</option>
+          <option value="Clothes">Clothes</option>
+          <option value="Toiletry">Toiletry</option>
+          <option value="Others">Others</option>
+          <option value="__new__">+ Add Category...</option>
+        </select>
+        <div id="ei-new-cat-box" class="hidden flex gap-1.5 pt-1">
+          <input id="ei-new-cat-input" type="text" placeholder="New category name" class="w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-1.5 text-xs" />
+          <button type="button" onclick="app.saveNewCategory('ei')" class="accent-bg px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0">Add</button>
+        </div>
+      </div>
+      <label class="flex items-center gap-2 text-xs text-slate-300 pt-1">
+        <input id="ei-doorway" type="checkbox" class="rounded" />
+        <span>Include in 60-Second Doorway Check</span>
+      </label>
+      <button
+        type="button"
+        id="ei-promote-btn"
+        onclick="app.promoteEditedItemToTemplate()"
+        class="w-full surface-subtle py-2 px-3 rounded-xl text-xs font-medium accent-text hover:opacity-90 transition text-left flex items-center justify-between"
+      >
+        <span>★ Save to my Default Packing Template</span>
+        <span class="text-[10px] text-slate-400">Always</span>
+      </button>
+      <div class="flex items-center justify-between gap-2 pt-2">
+        <button
+          type="button"
+          onclick="app.deleteEditedItem()"
+          class="bg-rose-500/15 text-rose-300 border border-rose-500/35 px-3 py-2 rounded-xl text-xs font-semibold hover:bg-rose-500/25 transition"
+        >
+          Remove
+        </button>
+        <div class="flex gap-2">
+          <button type="button" onclick="app.closeModals()" class="surface-subtle px-3.5 py-2 rounded-xl text-xs text-slate-300">Cancel</button>
+          <button type="button" onclick="app.submitEditItem()" class="accent-bg px-4 py-2 rounded-xl text-xs font-semibold">Save</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================= -->
   <!-- MODAL: ADD / EDIT ITEM IN DEFAULT TEMPLATE                -->
   <!-- ========================================================= -->
   <div id="add-rule-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
@@ -683,7 +758,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
 
       closeActiveModals() {
         let closedAny = false;
-        for (const id of ["add-item-modal", "add-rule-modal", "recreate-trip-modal", "delete-trip-modal", "delete-rule-modal", "new-trip-modal"]) {
+        for (const id of ["add-item-modal", "edit-item-modal", "add-rule-modal", "recreate-trip-modal", "delete-trip-modal", "delete-rule-modal", "new-trip-modal"]) {
           const el = document.getElementById(id);
           if (el && !el.classList.contains("hidden")) {
             el.classList.add("hidden");
@@ -691,6 +766,23 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           }
         }
         return closedAny;
+      }
+
+      showToast(msg) {
+        let toast = document.getElementById("packtrack-toast");
+        if (!toast) {
+          toast = document.createElement("div");
+          toast.id = "packtrack-toast";
+          toast.className =
+            "fixed bottom-20 left-1/2 -translate-x-1/2 z-50 surface-card border accent-pill px-4 py-2 rounded-xl text-xs font-semibold shadow-xl transition-opacity duration-200 pointer-events-none";
+          document.body.appendChild(toast);
+        }
+        toast.textContent = msg;
+        toast.style.opacity = "1";
+        clearTimeout(this._toastTimer);
+        this._toastTimer = setTimeout(() => {
+          if (toast) toast.style.opacity = "0";
+        }, 2600);
       }
 
       stepBackInterview() {
@@ -1337,14 +1429,81 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       openAddItemModal() {
+        const trip = this.state.trips?.[this.activeTripIdx];
         document.getElementById("ai-name").value = "";
         document.getElementById("ai-qty").value = "1";
-        document.getElementById("ai-doorway").checked = false;
+        document.getElementById("ai-doorway").checked = Boolean(trip && trip.tripMode === "DOORWAY");
         document.getElementById("ai-save-template").checked = false;
         document.getElementById("ai-new-cat-box")?.classList.add("hidden");
-        this.populateCategorySelect("ai-cat", "On Me");
+        this.populateCategorySelect("ai-cat", trip && trip.tripMode === "DOORWAY" ? "On Me" : "Others");
         document.getElementById("add-item-modal").classList.remove("hidden");
         this.pushHistoryState("add-item-modal");
+      }
+
+      openEditItemModal(itemIdx) {
+        const trip = this.state.trips?.[this.activeTripIdx];
+        const item = trip?.items?.[itemIdx];
+        if (!item) return;
+        this.editingItemIdx = itemIdx;
+        document.getElementById("ei-name").value = item.name || "";
+        document.getElementById("ei-qty").value = String(Math.max(1, Number(item.quantity) || 1));
+        const rawBag = String(item.bagLocation || "Carry-On").toLowerCase();
+        document.getElementById("ei-bag").value = rawBag.includes("check")
+          ? "Check-In"
+          : rawBag.includes("carry")
+          ? "Carry-On"
+          : "Personal";
+        document.getElementById("ei-new-cat-box")?.classList.add("hidden");
+        this.populateCategorySelect("ei-cat", item.category || "Others");
+        document.getElementById("ei-doorway").checked = Boolean(item.isDoorwayCritical);
+
+        const promoteBtn = document.getElementById("ei-promote-btn");
+        if (promoteBtn) {
+          const alreadyInTemplate = (this.state.custom_rules || []).some(
+            (r) => String(r.name || "").trim().toLowerCase() === String(item.name || "").trim().toLowerCase()
+          );
+          promoteBtn.classList.toggle("hidden", alreadyInTemplate);
+        }
+
+        document.getElementById("edit-item-modal").classList.remove("hidden");
+        this.pushHistoryState("edit-item-modal");
+      }
+
+      submitEditItem() {
+        const trip = this.state.trips?.[this.activeTripIdx];
+        const item = trip?.items?.[this.editingItemIdx];
+        if (!item) return;
+        const name = document.getElementById("ei-name").value.trim();
+        if (name) item.name = name;
+        item.quantity = Math.max(1, parseInt(document.getElementById("ei-qty").value, 10) || 1);
+        item.bagLocation = document.getElementById("ei-bag").value || "Carry-On";
+        const pendingCat = document.getElementById("ei-new-cat-input")?.value?.trim();
+        if (pendingCat) {
+          this.saveNewCategory("ei");
+        }
+        const rawCat = document.getElementById("ei-cat").value;
+        item.category = rawCat === "__new__" ? (pendingCat || "Others") : rawCat;
+        item.isDoorwayCritical = Boolean(document.getElementById("ei-doorway").checked);
+        this.editingItemIdx = null;
+        this.closeModals();
+        this.pushState();
+        this.showToast(\`Updated "\${item.name}"\`);
+      }
+
+      promoteEditedItemToTemplate() {
+        if (this.editingItemIdx === null || this.editingItemIdx === undefined) return;
+        this.promoteItemToTemplate(this.editingItemIdx);
+        const promoteBtn = document.getElementById("ei-promote-btn");
+        if (promoteBtn) promoteBtn.classList.add("hidden");
+        this.showToast("★ Saved to Default Packing Template");
+      }
+
+      deleteEditedItem() {
+        if (this.editingItemIdx === null || this.editingItemIdx === undefined) return;
+        const idx = this.editingItemIdx;
+        this.editingItemIdx = null;
+        this.closeModals();
+        this.deleteItem(idx);
       }
 
       openAddRuleModal() {
@@ -1393,7 +1552,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       closeModals() {
-        for (const id of ["new-trip-modal", "add-item-modal", "add-rule-modal", "delete-trip-modal", "delete-rule-modal", "recreate-trip-modal"]) {
+        for (const id of ["new-trip-modal", "add-item-modal", "edit-item-modal", "add-rule-modal", "delete-trip-modal", "delete-rule-modal", "recreate-trip-modal"]) {
           const el = document.getElementById(id);
           if (el) el.classList.add("hidden");
         }
@@ -1510,6 +1669,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           const luggage =
             carMode === "own_car" ? "two_checked_bags" : lugEl?.value || "carry_on";
 
+          const currentTrip = this.state.trips?.[this.activeTripIdx];
           const resp = await fetch("/api/trips/recreate", {
             method: "POST",
             headers: this.getHeaders(),
@@ -1519,6 +1679,8 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
               endDate,
               durationDays,
               tags: [purpose, carMode, luggage],
+              tripMode: currentTrip?.tripMode || "OUTBOUND",
+              existingItems: currentTrip?.items || [],
               geminiApiKey: localStorage.getItem("packtrack_gemini_key") || "",
             }),
           });
@@ -1526,7 +1688,12 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             this.state = await resp.json();
             this.closeModals();
             this.render();
+            this.showToast("✓ Checklist recreated (checked items preserved)");
+          } else {
+            this.showToast("Could not recreate checklist — please try again");
           }
+        } catch (_) {
+          this.showToast("Network error while recreating checklist");
         } finally {
           if (btn) {
             btn.textContent = "Recreate";
@@ -1615,7 +1782,16 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       deleteItem(itemIdx, ev) {
         if (ev) ev.stopPropagation();
         const trip = this.state.trips[this.activeTripIdx];
-        if (!trip) return;
+        if (!trip || !trip.items?.[itemIdx]) return;
+        const item = trip.items[itemIdx];
+        const isSuggested = String(item.weatherReason || "").startsWith("[SUGGESTED] ");
+        // If user is on the Doorway tab and removes an active item, only remove it from Doorway (keep in Pack list)
+        if (!isSuggested && trip.tripMode === "DOORWAY") {
+          item.isDoorwayCritical = false;
+          this.pushState();
+          this.showToast(\`Removed "\${item.name}" from Doorway check (kept in Pack)\`);
+          return;
+        }
         trip.items.splice(itemIdx, 1);
         this.pushState();
       }
@@ -1631,7 +1807,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       promoteItemToTemplate(itemIdx, ev) {
-        ev.stopPropagation();
+        if (ev) ev.stopPropagation();
         const trip = this.state.trips[this.activeTripIdx];
         const item = trip?.items?.[itemIdx];
         if (!item) return;
@@ -2146,8 +2322,43 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           for (const { item, idx } of entries) {
             const checked = mode === "RETURN_SWEEP" ? Boolean(item.packedReturn) : Boolean(item.packedOutbound);
             const row = document.createElement("div");
-            row.onclick = () => this.toggleItem(idx);
-            row.className = \`surface-card rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer hover:border-slate-600 transition \${checked ? "item-checked" : ""}\`;
+            let pressTimer = null;
+            let longPressed = false;
+            const startPress = () => {
+              longPressed = false;
+              clearTimeout(pressTimer);
+              pressTimer = setTimeout(() => {
+                longPressed = true;
+                this.openEditItemModal(idx);
+              }, 450);
+            };
+            const cancelPress = () => {
+              clearTimeout(pressTimer);
+            };
+            row.addEventListener("touchstart", startPress, { passive: true });
+            row.addEventListener("touchend", cancelPress);
+            row.addEventListener("touchmove", cancelPress);
+            row.addEventListener("touchcancel", cancelPress);
+            row.addEventListener("mousedown", (e) => {
+              if (e.button === 0) startPress();
+            });
+            row.addEventListener("mouseup", cancelPress);
+            row.addEventListener("mouseleave", cancelPress);
+            row.oncontextmenu = (e) => {
+              e.preventDefault();
+              cancelPress();
+              longPressed = true;
+              this.openEditItemModal(idx);
+            };
+            row.onclick = () => {
+              if (longPressed) {
+                longPressed = false;
+                return;
+              }
+              this.toggleItem(idx);
+            };
+            const removeTitle = mode === "DOORWAY" ? "Remove from Doorway Check (keeps in Pack)" : "Remove from Trip";
+            row.className = \`surface-card rounded-xl px-3.5 py-2.5 flex items-center justify-between gap-3 cursor-pointer select-none hover:border-slate-600 transition \${checked ? "item-checked" : ""}\`;
             row.innerHTML = \`
               <div class="flex items-center gap-3 min-w-0">
                 <div class="w-4 h-4 rounded flex items-center justify-center border \${checked ? "accent-bg border-transparent" : "border-slate-600"} text-[10px] font-bold shrink-0">
@@ -2156,7 +2367,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
                 <div class="min-w-0">
                   <div class="flex items-center gap-2">
                     <span class="text-xs font-medium text-white truncate \${checked ? "line-through" : ""}">\${item.name}</span>
-                    \${item.quantity > 1 ? \`<span class="accent-pill border text-[10px] font-bold px-1.5 py-0.2 rounded">×\${item.quantity}</span>\` : ""}
+                    \${item.quantity > 1 ? \`<span onclick="event.stopPropagation();app.openEditItemModal(\${idx})" class="accent-pill border text-[10px] font-bold px-1.5 py-0.2 rounded">×\${item.quantity}</span>\` : ""}
                   </div>
                   <p class="text-[11px] text-slate-400 truncate">
                     \${item.bagLocation || "Carry-On"}\${item.isDoorwayCritical ? " · Doorway" : ""}\${item.weatherReason ? " · " + item.weatherReason : ""}
@@ -2164,8 +2375,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
                 </div>
               </div>
               <div class="flex items-center gap-1 shrink-0">
-                <button type="button" title="Save to Default Template" onclick="app.promoteItemToTemplate(\${idx}, event)" class="text-[11px] text-slate-400 hover:text-white px-1.5 py-1 rounded">★</button>
-                <button type="button" title="Remove from Trip" onclick="app.deleteItem(\${idx}, event)" class="text-[11px] text-slate-500 hover:text-rose-400 px-1.5 py-1 rounded">✕</button>
+                <button type="button" title="\${removeTitle}" onclick="app.deleteItem(\${idx}, event)" class="text-[11px] text-slate-500 hover:text-rose-400 px-1.5 py-1 rounded">✕</button>
               </div>
             \`;
             sec.appendChild(row);
