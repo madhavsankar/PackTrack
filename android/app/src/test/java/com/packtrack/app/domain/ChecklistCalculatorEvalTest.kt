@@ -518,5 +518,63 @@ class ChecklistCalculatorEvalTest {
         assertTrue("GeminiVoiceAssistant must filter thought parts when extracting candidate JSON", agentText.contains("fun extractCandidateJson("))
         assertTrue("GeminiVoiceAssistant must persist updated startDate immediately during recreateTripChecklist", agentText.contains("FirestoreSyncService.markLocalMutation()"))
     }
+
+    @Test
+    fun eval_editTripDatesFeatureContracts() {
+        val candidates = listOf(
+            java.io.File("src/main"),
+            java.io.File("app/src/main"),
+            java.io.File("android/app/src/main")
+        )
+        val mainDir = candidates.firstOrNull { java.io.File(it, "AndroidManifest.xml").exists() }
+            ?: throw IllegalStateException("Could not locate AndroidManifest.xml from ${java.io.File(".").absolutePath}")
+
+        // Verify GeminiVoiceAssistant has editTripDates method with the right contract
+        val agentText = java.io.File(mainDir, "java/com/packtrack/app/agent/GeminiVoiceAssistant.kt").readText()
+        assertTrue(
+            "GeminiVoiceAssistant must have editTripDates method for lightweight date-only edits",
+            agentText.contains("suspend fun editTripDates(")
+        )
+        assertTrue(
+            "editTripDates must use NonCancellable to prevent cancellation during DB updates",
+            agentText.contains("NonCancellable") && agentText.contains("editTripDates")
+        )
+        assertTrue(
+            "editTripDates must call markLocalMutation to guard against Firestore overwrites",
+            agentText.contains("markLocalMutation()") && agentText.contains("editTripDates")
+        )
+        assertTrue(
+            "editTripDates must call updateTripDetailsAndWeather (not recreate items)",
+            agentText.contains("dao.updateTripDetailsAndWeather(") && agentText.contains("editTripDates")
+        )
+        assertTrue(
+            "editTripDates must scale clothes when duration changes (T-Shirts, Underwear, Socks, Jeans)",
+            agentText.contains("\"T-Shirts\", \"Underwear\", \"Socks\"") && agentText.contains("\"Jeans\"")
+        )
+        assertTrue(
+            "editTripDates must NOT call deleteAllItemsForTrip or recreateTripChecklist",
+            !agentText.substringAfter("fun editTripDates(").substringBefore("suspend fun ").contains("deleteAllItemsForTrip")
+        )
+
+        // Verify TripChecklistScreen has Edit Dates dialog and clickable date pill
+        val uiDir = java.io.File(mainDir, "java/com/packtrack/app/ui")
+        val tripChecklistText = java.io.File(uiDir, "TripChecklistScreen.kt").readText()
+        assertTrue(
+            "TripChecklistScreen must have showEditDatesDialog state variable",
+            tripChecklistText.contains("showEditDatesDialog")
+        )
+        assertTrue(
+            "TripChecklistScreen must call editTripDates from the Edit Dates dialog",
+            tripChecklistText.contains("voiceAssistant.editTripDates(")
+        )
+        assertTrue(
+            "TripChecklistScreen Edit Dates dialog must have a Save Dates button",
+            tripChecklistText.contains("\"Save Dates\"")
+        )
+        assertTrue(
+            "TripChecklistScreen date pill must be clickable to open Edit Dates dialog",
+            tripChecklistText.contains("showEditDatesDialog = true")
+        )
+    }
 }
 

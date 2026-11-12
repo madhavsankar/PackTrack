@@ -531,6 +531,64 @@ export class HttpRouter {
         return this.json(state, 200);
       }
 
+      if (path === "/api/trips/edit-dates") {
+        const state = await this.repo.getUserState(userId);
+        const idx = Number.isInteger(Number(body.tripIndex)) ? Number(body.tripIndex) : 0;
+        const trip = state.trips?.[idx];
+        if (!trip) {
+          return this.json({ error: "Trip not found" }, 404);
+        }
+        const startDate = String(body.startDate || "").trim();
+        const endDate = String(body.endDate || "").trim();
+        if (!startDate || !endDate || endDate <= startDate) {
+          return this.json({ error: "Invalid date range" }, 400);
+        }
+        const durationDays = Math.max(1, Math.min(30, Math.round((new Date(endDate) - new Date(startDate)) / 86400000)));
+        const prevDays = Number(trip.durationDays) || 3;
+
+        // Re-fetch weather for the new date range
+        const weather = await PackingEngineService.fetchDestinationWeather(
+          trip.destination || "Atlanta",
+          durationDays,
+          startDate,
+          endDate
+        );
+
+        // Scale clothing quantities if duration changed (only active items, not suggestions)
+        if (durationDays !== prevDays && Array.isArray(trip.items)) {
+          for (const item of trip.items) {
+            if (String(item.weatherReason || "").startsWith("[SUGGESTED] ")) continue;
+            const name = String(item.name || "").trim();
+            if (name === "T-Shirts" || name === "Underwear" || name === "Socks") {
+              item.quantity = durationDays + 1;
+              item.weatherReason = `${durationDays} days + 1 spare`;
+            } else if (name === "Jeans") {
+              item.quantity = Math.max(2, Math.ceil(durationDays / 3));
+              item.weatherReason = "1 pair per 3 days";
+            }
+          }
+        }
+
+        // Update trip dates and weather — do NOT regenerate items
+        trip.startDate = startDate;
+        trip.endDate = endDate;
+        trip.durationDays = durationDays;
+        trip.avgHighF = weather.avgHighF;
+        trip.avgLowF = weather.avgLowF;
+        trip.rainyDaysCount = weather.rainyDaysCount;
+        if (weather.hasSnow !== undefined) trip.hasSnow = weather.hasSnow;
+        if (weather.maxWindMph !== undefined) trip.maxWindMph = weather.maxWindMph;
+        if (weather.maxUvIndex !== undefined) trip.maxUvIndex = weather.maxUvIndex;
+        if (weather.plugTypes !== undefined) trip.plugTypes = weather.plugTypes;
+        const lowF = Math.round(weather.avgLowF);
+        const highF = Math.round(weather.avgHighF);
+        trip.lastAgentNote = `Updated dates (${durationDays}d) · ${lowF}°F–${highF}°F, ${weather.rainyDaysCount} rainy day(s).`;
+
+        state.trips[idx] = trip;
+        await this.repo.saveUserState(userId, state);
+        return this.json(state, 200);
+      }
+
       if (path === "/api/command") {
         const state = await this.repo.getUserState(userId);
         const res = await PackingEngineService.handleNaturalLanguageCommand(

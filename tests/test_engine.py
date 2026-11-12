@@ -829,5 +829,44 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn("Compact Umbrella", res["suggestedNames"])
 
 
+    def test_eval_cloudflare_edit_dates_endpoint_and_ui(self):
+        """Eval: Verifies the edit-dates endpoint exists in HttpRouter and the Edit Dates modal/methods exist in WebAppView."""
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+
+        # Verify HttpRouter has the edit-dates endpoint
+        router_path = os.path.join(root_dir, "cloudflare", "src", "controllers", "HttpRouter.js")
+        with open(router_path, "r", encoding="utf-8") as f:
+            router_src = f.read()
+        self.assertIn("/api/trips/edit-dates", router_src, "HttpRouter must have /api/trips/edit-dates endpoint")
+        self.assertIn("fetchDestinationWeather", router_src, "edit-dates must re-fetch weather for new dates")
+        # Verify it scales clothes without regenerating
+        self.assertIn("T-Shirts", router_src, "edit-dates must scale T-Shirts quantity")
+        self.assertIn("Socks", router_src, "edit-dates must scale Socks quantity")
+        self.assertIn("Jeans", router_src, "edit-dates must scale Jeans quantity")
+        # Verify it does NOT call createTripObject in the edit-dates block
+        edit_dates_block = router_src.split("/api/trips/edit-dates")[1].split("/api/command")[0]
+        self.assertNotIn("createTripObject", edit_dates_block, "edit-dates must NOT regenerate items via createTripObject")
+
+        # Verify WebAppView has the Edit Dates UI
+        view_path = os.path.join(root_dir, "cloudflare", "src", "ui", "WebAppView.js")
+        with open(view_path, "r", encoding="utf-8") as f:
+            view_src = f.read()
+        self.assertIn("edit-dates-modal", view_src, "WebAppView must have an edit-dates-modal")
+        self.assertIn("ed-start-date", view_src, "Edit Dates modal must have start date input")
+        self.assertIn("ed-end-date", view_src, "Edit Dates modal must have end date input")
+        self.assertIn("openEditDatesModal", view_src, "WebAppView must have openEditDatesModal method")
+        self.assertIn("confirmEditDates", view_src, "WebAppView must have confirmEditDates method")
+        self.assertIn("onEditDateChange", view_src, "WebAppView must have onEditDateChange method")
+        self.assertIn("Save Dates", view_src, "Edit Dates modal must have a Save Dates button")
+        self.assertIn("Edit Dates", view_src, "UI must have an Edit Dates button")
+        # Verify closeModals JS method includes edit-dates-modal
+        # Find the closeModals() { method definition in JS and check it references edit-dates-modal
+        close_def_marker = "closeModals() {"
+        close_idx = view_src.find(close_def_marker)
+        self.assertGreater(close_idx, 0, "WebAppView must define closeModals() method")
+        close_snippet = view_src[close_idx:close_idx + 500]
+        self.assertIn("edit-dates-modal", close_snippet, "closeModals must handle edit-dates-modal")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -123,6 +123,13 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             <div class="flex items-center gap-2 shrink-0">
               <button
                 type="button"
+                onclick="app.openEditDatesModal()"
+                class="surface-subtle px-2.5 py-1 rounded-lg text-[11px] font-semibold accent-text hover:opacity-90 transition"
+              >
+                ✎ Edit Dates
+              </button>
+              <button
+                type="button"
                 onclick="app.openRecreateTripModal()"
                 class="surface-subtle px-2.5 py-1 rounded-lg text-[11px] font-semibold accent-text hover:opacity-90 transition"
               >
@@ -649,6 +656,47 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       <div class="flex justify-end gap-2 pt-2">
         <button type="button" onclick="app.closeModals()" class="surface-subtle px-3.5 py-2 rounded-xl text-xs text-slate-300">Cancel</button>
         <button type="button" id="rt-submit-btn" onclick="app.confirmRecreateTrip()" class="accent-bg px-4 py-2 rounded-xl text-xs font-semibold transition">Recreate</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ========================================================= -->
+  <!-- MODAL: EDIT DATES ONLY (No Checklist Regeneration)        -->
+  <!-- ========================================================= -->
+  <div id="edit-dates-modal" class="hidden fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+    <div class="surface-card rounded-2xl p-5 w-full max-w-sm space-y-3.5">
+      <div class="flex items-center justify-between">
+        <h3 id="ed-modal-title" class="text-sm font-bold text-white">Edit Dates</h3>
+        <button type="button" onclick="app.closeModals()" class="text-slate-400 hover:text-white text-xs">✕</button>
+      </div>
+      <p class="text-xs text-slate-300">
+        Change the travel dates without regenerating your checklist — all items and checkmarks are preserved. Weather will be refreshed for the new dates.
+      </p>
+      <div class="space-y-3">
+        <div class="grid grid-cols-2 gap-2">
+          <div>
+            <label class="text-[11px] font-semibold text-slate-400 uppercase">Start Date</label>
+            <input
+              id="ed-start-date"
+              type="date"
+              onchange="app.onEditDateChange()"
+              class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs"
+            />
+          </div>
+          <div>
+            <label id="ed-days-label" class="text-[11px] font-semibold text-slate-400 uppercase">End Date</label>
+            <input
+              id="ed-end-date"
+              type="date"
+              onchange="app.onEditDateChange()"
+              class="mt-1 w-full bg-[#0b0f17] text-white border border-[#232f42] rounded-xl px-3 py-2 text-xs"
+            />
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end gap-2 pt-2">
+        <button type="button" onclick="app.closeModals()" class="surface-subtle px-3.5 py-2 rounded-xl text-xs text-slate-300">Cancel</button>
+        <button type="button" id="ed-submit-btn" onclick="app.confirmEditDates()" class="accent-bg px-4 py-2 rounded-xl text-xs font-semibold transition">Save Dates</button>
       </div>
     </div>
   </div>
@@ -1574,7 +1622,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       }
 
       closeModals() {
-        for (const id of ["new-trip-modal", "add-item-modal", "edit-item-modal", "add-rule-modal", "delete-trip-modal", "delete-rule-modal", "recreate-trip-modal"]) {
+        for (const id of ["new-trip-modal", "add-item-modal", "edit-item-modal", "add-rule-modal", "delete-trip-modal", "delete-rule-modal", "recreate-trip-modal", "edit-dates-modal"]) {
           const el = document.getElementById(id);
           if (el) el.classList.add("hidden");
         }
@@ -1638,6 +1686,122 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         this.onRecreateCarChange();
         this.pushHistoryState("recreate-trip-modal");
         document.getElementById("recreate-trip-modal").classList.remove("hidden");
+      }
+
+      openEditDatesModal() {
+        if (this.activeTripIdx === null || !this.state.trips?.[this.activeTripIdx]) return;
+        const trip = this.state.trips[this.activeTripIdx];
+        const todayIso = this.getLocalTodayIso();
+        const rawStart = String(trip.startDate || "").trim().slice(0, 10);
+        const startIso = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : todayIso;
+        const curDays = Math.max(1, Math.min(30, Number(trip.durationDays) || 3));
+        const rawEnd = String(trip.endDate || "").trim().slice(0, 10);
+        const endIso =
+          /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) && rawEnd > startIso
+            ? rawEnd
+            : this.addDaysIso(startIso, curDays);
+
+        const titleEl = document.getElementById("ed-modal-title");
+        if (titleEl) titleEl.textContent = `Edit Dates for ${trip.destination || "Trip"}`;
+
+        const sEl = document.getElementById("ed-start-date");
+        const eEl = document.getElementById("ed-end-date");
+        if (sEl) sEl.value = startIso;
+        if (eEl) {
+          eEl.min = startIso;
+          eEl.value = endIso;
+        }
+        const daysLabel = document.getElementById("ed-days-label");
+        const calcDays = this.calcDaysBetween(startIso, endIso);
+        if (daysLabel) daysLabel.textContent = `End Date (${calcDays}d)`;
+
+        this.pushHistoryState("edit-dates-modal");
+        document.getElementById("edit-dates-modal").classList.remove("hidden");
+      }
+
+      onEditDateChange() {
+        const sEl = document.getElementById("ed-start-date");
+        const eEl = document.getElementById("ed-end-date");
+        if (!sEl || !eEl) return;
+        const startIso = sEl.value || this.getLocalTodayIso();
+        const maxEndIso = this.addDaysIso(startIso, 30);
+        eEl.min = startIso;
+        if (!eEl.value || eEl.value <= startIso) {
+          const trip = this.state.trips?.[this.activeTripIdx];
+          const fallbackDays = Math.max(1, Math.min(30, Number(trip?.durationDays) || 3));
+          eEl.value = this.addDaysIso(startIso, fallbackDays);
+        } else if (eEl.value > maxEndIso) {
+          eEl.value = maxEndIso;
+        }
+        const days = this.calcDaysBetween(startIso, eEl.value);
+        const daysLabel = document.getElementById("ed-days-label");
+        if (daysLabel) daysLabel.textContent = `End Date (${days}d)`;
+      }
+
+      async confirmEditDates() {
+        if (this.activeTripIdx === null) return;
+        const btn = document.getElementById("ed-submit-btn");
+        if (btn) {
+          btn.textContent = "Saving...";
+          btn.disabled = true;
+        }
+        this._isMutatingTrip = true;
+        try {
+          const sEl = document.getElementById("ed-start-date");
+          const eEl = document.getElementById("ed-end-date");
+          const startDate = sEl?.value || "";
+          const endDate = eEl?.value || "";
+          if (!startDate || !endDate || endDate <= startDate) {
+            this.showToast("Please select valid start and end dates");
+            return;
+          }
+          const durationDays = this.calcDaysBetween(startDate, endDate);
+
+          // Optimistic local update
+          const currentTrip = this.state.trips?.[this.activeTripIdx];
+          if (currentTrip) {
+            currentTrip.startDate = startDate;
+            currentTrip.endDate = endDate;
+            currentTrip.durationDays = durationDays;
+            this.render();
+          }
+
+          if (this._lastPushPromise) {
+            await Promise.race([this._lastPushPromise, new Promise((r) => setTimeout(r, 1500))]);
+          }
+          const resp = await fetch("/api/trips/edit-dates", {
+            method: "POST",
+            headers: this.getHeaders(),
+            body: JSON.stringify({
+              tripIndex: this.activeTripIdx,
+              startDate,
+              endDate,
+            }),
+          });
+          if (resp.ok) {
+            this.state = await resp.json();
+            // Re-assert the dates on the local state in case of any server normalisation
+            if (this.state.trips?.[this.activeTripIdx]) {
+              this.state.trips[this.activeTripIdx].startDate = startDate;
+              this.state.trips[this.activeTripIdx].endDate = endDate;
+              this.state.trips[this.activeTripIdx].durationDays = durationDays;
+            }
+            this.closeModals();
+            this.render();
+            const rangeLabel = this.formatDateRange(startDate, durationDays, endDate);
+            this.showToast(`✓ Dates updated to ${rangeLabel} (${durationDays}d)`);
+          } else {
+            this.showToast("Could not update dates — please try again");
+          }
+        } catch (_) {
+          this.showToast("Network error while updating dates");
+        } finally {
+          this._isMutatingTrip = false;
+          if (btn) {
+            btn.textContent = "Save Dates";
+            btn.disabled = false;
+          }
+        }
       }
 
       onRecreateDateChange() {

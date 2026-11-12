@@ -13,6 +13,7 @@ import com.packtrack.app.domain.LuggageSpace
 import com.packtrack.app.domain.PackingCategory
 import com.packtrack.app.domain.RuleCondition
 import com.packtrack.app.domain.TravelerTemplateCatalog
+import com.packtrack.app.domain.TripDateUtils
 import com.packtrack.app.domain.TripMode
 import com.packtrack.app.domain.WeatherForecast
 import com.packtrack.app.ui.theme.PackTrackThemeState
@@ -280,6 +281,74 @@ class GeminiVoiceAssistant(
             DEFAULT_MODEL_CASCADE.forEach(::addUnique)
             return result
         }
+    }
+
+    /**
+     * Lightweight date-only edit: updates startDate, durationDays, and re-fetches weather for
+     * the new date range. Scales clothing quantities when the trip length changes. Does NOT
+     * regenerate or remove any checklist items — all items, checkmarks, and manual additions
+     * are preserved exactly as-is.
+     */
+    suspend fun editTripDates(
+        tripId: Long,
+        newStartDate: String,
+        newEndDate: String
+    ): String = withContext(kotlinx.coroutines.NonCancellable + Dispatchers.IO) {
+        FirestoreSyncService.markLocalMutation()
+        val trip = dao.getTripById(tripId) ?: return@withContext "Trip not found."
+        val newDays = TripDateUtils.computeDurationDays(newStartDate, newEndDate, trip.durationDays)
+
+        // Fetch weather for the new date range
+        val forecast = try {
+            OpenMeteoWeatherService.fetchWeather(trip.destination, newDays, newStartDate, newEndDate)
+        } catch (_: Exception) {
+            // If weather fetch fails, keep existing weather values
+            null
+        }
+
+        val changes = mutableListOf<String>()
+
+        // Scale clothing quantities when trip length changes
+        if (newDays != trip.durationDays) {
+            val existingItems = dao.getItemsForTrip(tripId)
+            val activeItems = existingItems.filter { !ChecklistCalculator.isSuggested(it) }
+            for (item in activeItems) {
+                when (item.name) {
+                    "T-Shirts", "Underwear", "Socks" -> {
+                        dao.updateItemQuantity(item.id, newDays + 1, "$newDays days + 1 spare")
+                    }
+                    "Jeans" -> {
+                        dao.updateItemQuantity(item.id, maxOf(2, kotlin.math.ceil(newDays / 3.0).toInt()), "1 pair per 3 days")
+                    }
+                }
+            }
+            changes.add("scaled clothes to $newDays days")
+        }
+
+        val highF = forecast?.avgHighF ?: trip.avgHighF
+        val lowF = forecast?.avgLowF ?: trip.avgLowF
+        val rainDays = forecast?.rainyDaysCount ?: trip.rainyDaysCount
+
+        val dateRange = TripDateUtils.formatDateRange(newStartDate, newDays, newEndDate)
+        val summary = buildString {
+            append("Updated dates to $dateRange (${newDays}d) · ${lowF.toInt()}°F–${highF.toInt()}°F")
+            if (changes.isNotEmpty()) {
+                append(", ${changes.joinToString(", ")}")
+            }
+        }
+
+        dao.updateTripDetailsAndWeather(
+            tripId = tripId,
+            startDate = newStartDate,
+            days = newDays,
+            tagsCsv = trip.tagsCsv,
+            highF = highF,
+            lowF = lowF,
+            rainDays = rainDays,
+            note = summary
+        )
+        FirestoreSyncService.pushLocalStateToFirestore(dao, currentUserId)
+        summary
     }
 
     /**

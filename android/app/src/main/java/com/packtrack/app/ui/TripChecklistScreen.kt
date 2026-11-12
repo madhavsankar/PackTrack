@@ -69,6 +69,7 @@ fun TripChecklistScreen(
 
     var isRefreshingWeather by remember { mutableStateOf(false) }
     var showRecreateConfirmDialog by remember { mutableStateOf(false) }
+    var showEditDatesDialog by remember { mutableStateOf(false) }
     var showAddItemDialog by remember { mutableStateOf(false) }
     var longPressedItem by remember { mutableStateOf<PackingItemEntity?>(null) }
     var itemBeingEdited by remember { mutableStateOf<PackingItemEntity?>(null) }
@@ -141,6 +142,7 @@ fun TripChecklistScreen(
                                 modifier = Modifier.weight(1f, fill = false)
                             )
                             Surface(
+                                onClick = { showEditDatesDialog = true },
                                 shape = RoundedCornerShape(6.dp),
                                 color = MaterialTheme.colorScheme.surfaceVariant
                             ) {
@@ -871,6 +873,157 @@ fun TripChecklistScreen(
             },
             dismissButton = {
                 TextButton(onClick = { itemBeingEdited = null }) {
+                    Text("Cancel")
+                }
+            }
+        )
+    }
+
+    // ── Edit Dates Only Dialog (lightweight — no checklist regeneration) ──
+    if (showEditDatesDialog) {
+        val today = remember { java.time.LocalDate.now() }
+        val initialStartIso = remember(activeTrip.startDate) {
+            (TripDateUtils.parseStartDate(activeTrip.startDate) ?: today).toString()
+        }
+        val initialEndIso = remember(initialStartIso, activeTrip.durationDays) {
+            TripDateUtils.computeEndDate(initialStartIso, activeTrip.durationDays, today).toString()
+        }
+
+        var editStartDate by remember(activeTrip.id) { mutableStateOf(initialStartIso) }
+        var editEndDate by remember(activeTrip.id) { mutableStateOf(initialEndIso) }
+        val editDays = remember(editStartDate, editEndDate) {
+            TripDateUtils.computeDurationDays(editStartDate, editEndDate, activeTrip.durationDays)
+        }
+
+        fun openDatePicker(currentIso: String, onPicked: (String) -> Unit) {
+            val initDate = TripDateUtils.parseStartDate(currentIso) ?: today
+            android.app.DatePickerDialog(
+                context,
+                { _, y, m, d ->
+                    onPicked(java.time.LocalDate.of(y, m + 1, d).toString())
+                },
+                initDate.year,
+                initDate.monthValue - 1,
+                initDate.dayOfMonth
+            ).show()
+        }
+
+        AlertDialog(
+            onDismissRequest = { showEditDatesDialog = false },
+            containerColor = MaterialTheme.colorScheme.surface,
+            title = { Text("Edit Dates") },
+            text = {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    Text(
+                        text = "Change only the travel dates. Your checklist items, checkmarks, and edits are preserved. Weather and clothing quantities will be updated automatically.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+
+                    Text(
+                        text = "${TripDateUtils.formatDateRange(editStartDate, editDays, editEndDate)} · ${editDays}d",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Surface(
+                            onClick = {
+                                openDatePicker(editStartDate) { pickedStart ->
+                                    val prevDays = editDays
+                                    editStartDate = pickedStart
+                                    val s = TripDateUtils.parseStartDate(pickedStart) ?: today
+                                    val e = TripDateUtils.parseStartDate(editEndDate) ?: s.plusDays(prevDays.toLong())
+                                    if (!e.isAfter(s)) {
+                                        editEndDate = s.plusDays(maxOf(1, prevDays).toLong()).toString()
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                Text(
+                                    text = "Start Date",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = editStartDate,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+
+                        Surface(
+                            onClick = {
+                                openDatePicker(editEndDate) { pickedEnd ->
+                                    val s = TripDateUtils.parseStartDate(editStartDate) ?: today
+                                    val e = TripDateUtils.parseStartDate(pickedEnd) ?: s.plusDays(1)
+                                    if (e.isAfter(s)) {
+                                        editEndDate = pickedEnd
+                                    } else {
+                                        editStartDate = e.minusDays(1).toString()
+                                        editEndDate = pickedEnd
+                                    }
+                                }
+                            },
+                            shape = RoundedCornerShape(10.dp),
+                            color = MaterialTheme.colorScheme.surfaceVariant,
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp)) {
+                                Text(
+                                    text = "End Date (${editDays}d)",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                                Text(
+                                    text = editEndDate,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        val chosenStartDate = editStartDate
+                        val chosenEndDate = editEndDate
+                        showEditDatesDialog = false
+                        isRefreshingWeather = true
+                        scope.launch {
+                            try {
+                                val summary = voiceAssistant.editTripDates(
+                                    tripId = tripId,
+                                    newStartDate = chosenStartDate,
+                                    newEndDate = chosenEndDate
+                                )
+                                Toast.makeText(context, summary, Toast.LENGTH_SHORT).show()
+                            } finally {
+                                isRefreshingWeather = false
+                            }
+                        }
+                    }
+                ) {
+                    Text("Save Dates")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { showEditDatesDialog = false }) {
                     Text("Cancel")
                 }
             }
