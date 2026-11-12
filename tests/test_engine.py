@@ -595,7 +595,7 @@ class TestPackTrackEngine(unittest.TestCase):
 
         fmt_start = webapp_src.index("formatDateRange(rawStartDate, durationDays, rawEndDate) {")
         fmt_end = webapp_src.index("isPlugInfoNeeded(country, countryCode, plugTypes) {")
-        fmt_method = webapp_src[fmt_start:fmt_end].replace("\\`", "`").replace("\\$", "$")
+        fmt_method = webapp_src[fmt_start:fmt_end].replace("\\`", "`").replace("\\$", "$").replace("\\\\", "\\")
 
         plug_start = webapp_src.index("isPlugInfoNeeded(country, countryCode, plugTypes) {")
         plug_end = webapp_src.index("setAccentHue(hueVal) {")
@@ -874,6 +874,61 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertGreater(close_idx, 0, "WebAppView must define closeModals() method")
         close_snippet = view_src[close_idx:close_idx + 500]
         self.assertIn("edit-dates-modal", close_snippet, "closeModals must handle edit-dates-modal")
+
+        # Parse every Cloudflare JS module AND the inner <script> of WEB_APP_HTML via Node/JSC
+        import glob
+        import json
+        import re
+        import shutil
+        import subprocess
+        import tempfile
+
+        node_bin = shutil.which("node")
+        jsc_bin = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        js_runner = node_bin if node_bin else jsc_bin
+
+        for js_file in sorted(glob.glob(os.path.join(root_dir, "cloudflare", "**", "*.js"), recursive=True)):
+            with open(js_file, "r", encoding="utf-8") as jf:
+                code = jf.read()
+            cleaned = re.sub(r"^\s*import\s+.*?;?\s*$", "", code, flags=re.M)
+            cleaned = re.sub(r"^\s*export\s+default\s+", "const _defaultExport = ", cleaned, flags=re.M)
+            cleaned = re.sub(r"^\s*export\s+(class|const|function|async)\s+", r"\1 ", cleaned, flags=re.M)
+            with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
+                tf.write(f"new Function({cleaned!r});")
+                tmp_path = tf.name
+            try:
+                proc = subprocess.run([js_runner, tmp_path], capture_output=True, text=True)
+                self.assertEqual(proc.returncode, 0, f"JS syntax error in {js_file}: {proc.stdout} {proc.stderr}")
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+
+        eval_view_harness = view_src.replace("export const WEB_APP_HTML =", "const WEB_APP_HTML =") + """
+        const scripts = [...WEB_APP_HTML.matchAll(/<script>([\\s\\S]*?)<\\/script>/g)];
+        const inner = scripts[scripts.length - 1][1].replace("window.app = new PackTrackClient();", "return PackTrackClient;");
+        const PackTrackClient = (new Function(inner))();
+        const proto = PackTrackClient.prototype;
+        const out = JSON.stringify({
+          range: proto.formatDateRange("2026-11-13", 3, "2026-11-16"),
+          crossMonth: proto.formatDateRange("2026-11-29", 4, "2026-12-03"),
+          daysUntilNumber: typeof proto.daysUntilStart("2026-11-13") === "number",
+          cleanReason: String("[SUGGESTED] Rain likely").replace(/^\\[SUGGESTED\\]\\s*/i, "").trim()
+        });
+        if (typeof console !== 'undefined' && console.log) console.log(out);
+        else if (typeof print !== 'undefined') print(out);
+        """
+        with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as tf:
+            tf.write(eval_view_harness)
+            tmp_path = tf.name
+        try:
+            proc = subprocess.run([js_runner, tmp_path], capture_output=True, text=True, check=True)
+            parsed = json.loads(proc.stdout.strip().splitlines()[-1])
+            self.assertEqual(parsed["range"], "Nov 13–16")
+            self.assertEqual(parsed["crossMonth"], "Nov 29 – Dec 3")
+            self.assertTrue(parsed["daysUntilNumber"])
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
 
 
 if __name__ == "__main__":

@@ -1076,7 +1076,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
 
       daysUntilStart(rawStartDate) {
         const s = String(rawStartDate || "").trim().slice(0, 10);
-        if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(s)) return null;
         const [y, m, d] = s.split("-").map(Number);
         const startMidnight = new Date(y, m - 1, d);
         const now = new Date();
@@ -1114,7 +1114,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
       formatDateRange(rawStartDate, durationDays, rawEndDate) {
         const sClean = String(rawStartDate || "").trim().slice(0, 10);
         let sDate;
-        if (/^\d{4}-\d{2}-\d{2}$/.test(sClean)) {
+        if (/^\\d{4}-\\d{2}-\\d{2}$/.test(sClean)) {
           const [y, m, d] = sClean.split("-").map(Number);
           sDate = new Date(Date.UTC(y, m - 1, d));
         } else {
@@ -1124,7 +1124,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         const days = Math.max(1, Number(durationDays) || 1);
         const eClean = String(rawEndDate || "").trim().slice(0, 10);
         let eDate;
-        if (/^\d{4}-\d{2}-\d{2}$/.test(eClean)) {
+        if (/^\\d{4}-\\d{2}-\\d{2}$/.test(eClean)) {
           const [y, m, d] = eClean.split("-").map(Number);
           eDate = new Date(Date.UTC(y, m - 1, d));
         } else {
@@ -1633,11 +1633,11 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         const trip = this.state.trips[this.activeTripIdx];
         const todayIso = this.getLocalTodayIso();
         const rawStart = String(trip.startDate || "").trim().slice(0, 10);
-        const startIso = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : todayIso;
+        const startIso = /^\\d{4}-\\d{2}-\\d{2}$/.test(rawStart) ? rawStart : todayIso;
         const curDays = Math.max(1, Math.min(30, Number(trip.durationDays) || 3));
         const rawEnd = String(trip.endDate || "").trim().slice(0, 10);
         const endIso =
-          /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) && rawEnd > startIso
+          /^\\d{4}-\\d{2}-\\d{2}$/.test(rawEnd) && rawEnd > startIso
             ? rawEnd
             : this.addDaysIso(startIso, curDays);
 
@@ -1693,16 +1693,16 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         const trip = this.state.trips[this.activeTripIdx];
         const todayIso = this.getLocalTodayIso();
         const rawStart = String(trip.startDate || "").trim().slice(0, 10);
-        const startIso = /^\d{4}-\d{2}-\d{2}$/.test(rawStart) ? rawStart : todayIso;
+        const startIso = /^\\d{4}-\\d{2}-\\d{2}$/.test(rawStart) ? rawStart : todayIso;
         const curDays = Math.max(1, Math.min(30, Number(trip.durationDays) || 3));
         const rawEnd = String(trip.endDate || "").trim().slice(0, 10);
         const endIso =
-          /^\d{4}-\d{2}-\d{2}$/.test(rawEnd) && rawEnd > startIso
+          /^\\d{4}-\\d{2}-\\d{2}$/.test(rawEnd) && rawEnd > startIso
             ? rawEnd
             : this.addDaysIso(startIso, curDays);
 
         const titleEl = document.getElementById("ed-modal-title");
-        if (titleEl) titleEl.textContent = `Edit Dates for ${trip.destination || "Trip"}`;
+        if (titleEl) titleEl.textContent = \`Edit Dates for \${trip.destination || "Trip"}\`;
 
         const sEl = document.getElementById("ed-start-date");
         const eEl = document.getElementById("ed-end-date");
@@ -1713,7 +1713,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         }
         const daysLabel = document.getElementById("ed-days-label");
         const calcDays = this.calcDaysBetween(startIso, endIso);
-        if (daysLabel) daysLabel.textContent = `End Date (${calcDays}d)`;
+        if (daysLabel) daysLabel.textContent = \`End Date (\${calcDays}d)\`;
 
         this.pushHistoryState("edit-dates-modal");
         document.getElementById("edit-dates-modal").classList.remove("hidden");
@@ -1735,7 +1735,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         }
         const days = this.calcDaysBetween(startIso, eEl.value);
         const daysLabel = document.getElementById("ed-days-label");
-        if (daysLabel) daysLabel.textContent = `End Date (${days}d)`;
+        if (daysLabel) daysLabel.textContent = \`End Date (\${days}d)\`;
       }
 
       async confirmEditDates() {
@@ -1789,7 +1789,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             this.closeModals();
             this.render();
             const rangeLabel = this.formatDateRange(startDate, durationDays, endDate);
-            this.showToast(`✓ Dates updated to ${rangeLabel} (${durationDays}d)`);
+            this.showToast(\`✓ Dates updated to \${rangeLabel} (\${durationDays}d)\`);
           } else {
             this.showToast("Could not update dates — please try again");
           }
@@ -2011,7 +2011,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
         const trip = this.state.trips[this.activeTripIdx];
         const item = trip?.items?.[itemIdx];
         if (!item) return;
-        const cleanReason = String(item.weatherReason || "").replace(/^\[SUGGESTED\]\s*/i, "").trim();
+        const cleanReason = String(item.weatherReason || "").replace(/^\\[SUGGESTED\\]\\s*/i, "").trim();
         item.weatherReason = cleanReason ? \`✨ \${cleanReason}\` : "✨ Gemini suggestion";
         this.pushState();
       }
@@ -2620,7 +2620,7 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           \`;
 
           for (const { item, idx } of suggestedIndexed) {
-            const cleanReason = String(item.weatherReason || "").replace(/^\[SUGGESTED\]\s*/i, "").trim();
+            const cleanReason = String(item.weatherReason || "").replace(/^\\[SUGGESTED\\]\\s*/i, "").trim();
             const card = document.createElement("div");
             card.className = "surface-subtle rounded-xl px-3.5 py-3 flex items-center justify-between gap-3 border accent-pill";
             card.style.backgroundColor = "rgba(28, 37, 54, 0.85)";
