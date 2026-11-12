@@ -739,6 +739,14 @@ class TestPackTrackEngine(unittest.TestCase):
         with open(mcp_path, "r", encoding="utf-8") as f:
             mcp_js = f.read()
         self.assertIn('geminiApiKey: this.env?.GEMINI_API_KEY || ""', mcp_js)
+        for hint in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
+            self.assertIn(hint, mcp_js)
+
+        from packtrack.mcp_server import MCP_TOOLS as PY_MCP_TOOLS
+        for tool in PY_MCP_TOOLS:
+            ann = tool.get("annotations", {})
+            for hint in ("readOnlyHint", "destructiveHint", "idempotentHint", "openWorldHint"):
+                self.assertIsInstance(ann.get(hint), bool)
 
         self.assertIn("BackHandler(enabled = isBusy)", interview_kt)
         self.assertIn("quantity = editQty.toIntOrNull()?.coerceAtLeast(1) ?: item.quantity", trip_kt)

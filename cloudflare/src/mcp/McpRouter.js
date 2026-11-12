@@ -14,6 +14,12 @@ export const MCP_TOOLS = [
         user: { type: "string", description: "User email or ID" },
       },
     },
+    annotations: {
+      readOnlyHint: true,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   {
     name: "create_trip",
@@ -32,6 +38,12 @@ export const MCP_TOOLS = [
       },
       required: ["destination"],
     },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: false,
+      openWorldHint: true,
+    },
   },
   {
     name: "toggle_item",
@@ -47,6 +59,12 @@ export const MCP_TOOLS = [
       },
       required: ["item_name"],
     },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
+    },
   },
   {
     name: "set_trip_mode",
@@ -59,6 +77,12 @@ export const MCP_TOOLS = [
         mode: { type: "string", enum: ["OUTBOUND", "DOORWAY", "RETURN_SWEEP"] },
       },
       required: ["mode"],
+    },
+    annotations: {
+      readOnlyHint: false,
+      destructiveHint: false,
+      idempotentHint: true,
+      openWorldHint: false,
     },
   },
 ];

@@ -31,6 +31,12 @@ MCP_TOOLS: List[Dict[str, Any]] = [
             "type": "object",
             "properties": {},
         },
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
     },
     {
         "name": "analyze_trip_and_ask_questions",
@@ -52,6 +58,12 @@ MCP_TOOLS: List[Dict[str, Any]] = [
                 },
             },
             "required": ["destination", "duration_days"],
+        },
+        "annotations": {
+            "readOnlyHint": True,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": True,
         },
     },
     {
@@ -85,6 +97,12 @@ MCP_TOOLS: List[Dict[str, Any]] = [
             },
             "required": ["destination", "duration_days"],
         },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": False,
+            "openWorldHint": True,
+        },
     },
     {
         "name": "update_packing_status",
@@ -115,6 +133,12 @@ MCP_TOOLS: List[Dict[str, Any]] = [
             },
             "required": ["trip_id"],
         },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
+        },
     },
     {
         "name": "customize_travel_template",
@@ -137,6 +161,12 @@ MCP_TOOLS: List[Dict[str, Any]] = [
                 "is_doorway_critical": {"type": "boolean"},
             },
             "required": ["module_or_section", "item_name", "category"],
+        },
+        "annotations": {
+            "readOnlyHint": False,
+            "destructiveHint": False,
+            "idempotentHint": True,
+            "openWorldHint": False,
         },
     },
 ]
