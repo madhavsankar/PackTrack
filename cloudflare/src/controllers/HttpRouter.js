@@ -446,11 +446,22 @@ export class HttpRouter {
       if (path === "/api/trips/recreate") {
         const state = await this.repo.getUserState(userId);
         const idx = Number.isInteger(Number(body.tripIndex)) ? Number(body.tripIndex) : 0;
-        const existing = state.trips?.[idx] || state.trips?.[0];
+        const reqDest = String(body.destination || "").trim().toLowerCase();
+        let targetIdx = state.trips?.[idx] ? idx : 0;
+        if (
+          reqDest &&
+          state.trips?.[targetIdx] &&
+          String(state.trips[targetIdx].destination || "").trim().toLowerCase() !== reqDest
+        ) {
+          const matchedIdx = (state.trips || []).findIndex(
+            (t) => String(t?.destination || "").trim().toLowerCase() === reqDest
+          );
+          if (matchedIdx !== -1) targetIdx = matchedIdx;
+        }
+        const existing = state.trips?.[targetIdx] || state.trips?.[0];
         if (!existing) {
           return this.json({ error: "Trip not found" }, 404);
         }
-        const targetIdx = state.trips?.[idx] ? idx : 0;
         const prevMap = new Map();
         const combinedExistingItems = [
           ...(existing.items || []),

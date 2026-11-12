@@ -743,6 +743,91 @@ class TestPackTrackEngine(unittest.TestCase):
         self.assertIn("BackHandler(enabled = isBusy)", interview_kt)
         self.assertIn("quantity = editQty.toIntOrNull()?.coerceAtLeast(1) ?: item.quantity", trip_kt)
 
+        # Verify Gemini multipart thought-part filtering, prompt optimization, and Recreate date persistence
+        self.assertIn("extractCandidateJson", engine_js)
+        self.assertIn("!p.thought", engine_js)
+        with open(os.path.join(root_dir, "android", "app", "src", "main", "java", "com", "packtrack", "app", "data", "FirestoreSyncService.kt"), "r", encoding="utf-8") as f:
+            sync_kt = f.read()
+        self.assertIn("markLocalMutation()", sync_kt)
+        self.assertIn("this._isMutatingTrip = true", webapp_js)
+        self.assertIn("currentTrip.startDate = startDate", webapp_js)
+
+    def test_eval_cloudflare_thinking_parts_and_recreate_date_update(self):
+        """Eval: Verifies Gemini 2.5/3.x multipart thought responses succeed with usedFallback=false and recreate updates startDate/endDate (e.g. Nov 11 -> Nov 13..16)."""
+        import json
+        import shutil
+        import subprocess
+
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+        engine_path = os.path.join(root_dir, "cloudflare", "src", "services", "PackingEngineService.js")
+        with open(engine_path, "r", encoding="utf-8") as f:
+            engine_src = f.read().replace("export class PackingEngineService", "class PackingEngineService")
+
+        eval_harness = (
+            engine_src
+            + """
+        (async () => {
+          const thoughtMultiPartResponse = {
+            candidates: [
+              {
+                content: {
+                  parts: [
+                    { thought: true, text: "Thinking through conditional rules and weather..." },
+                    {
+                      text: JSON.stringify({
+                        templateItems: [
+                          { name: "Laptop", category: "Electronics", quantity: 1, bagLocation: "Personal", isDoorwayCritical: true, weatherReason: "Work trip" }
+                        ],
+                        suggestedItems: [
+                          { name: "Compact Umbrella", category: "Others", quantity: 1, bagLocation: "Carry-On", reason: "Rain forecast on Nov 14" }
+                        ]
+                      })
+                    }
+                  ]
+                }
+              }
+            ]
+          };
+
+          const mockFetch = async () => ({
+            ok: true,
+            status: 200,
+            json: async () => thoughtMultiPartResponse
+          });
+
+          const evalRes = await PackingEngineService.evaluateTemplateAndSuggestWithGemini({
+            weather: { city: "Seattle", country: "United States", countryCode: "US", avgHighF: 54, avgLowF: 43, rainyDaysCount: 2, isInternational: false },
+            durationDays: 3,
+            tags: ["work", "rental_car", "carry_on"],
+            customRules: [
+              { name: "Phones", category: "On Me", moduleKey: "Always", scaleByDays: false, ratioPerDay: 1, isDoorwayCritical: true, bagLocation: "Personal" },
+              { name: "Laptop", category: "Electronics", moduleKey: "Only when working", scaleByDays: false, ratioPerDay: 1, isDoorwayCritical: true, bagLocation: "Personal" }
+            ],
+            geminiApiKey: "test-key",
+            fetchImpl: mockFetch
+          });
+
+          const out = JSON.stringify({
+            usedFallback: evalRes.usedFallback,
+            templateNames: evalRes.templateItems.map(i => i.name),
+            suggestedNames: evalRes.suggestedItems.map(i => i.name)
+          });
+          if (typeof console !== 'undefined' && console.log) console.log(out);
+          else if (typeof print !== 'undefined') print(out);
+        })();
+        """
+        )
+
+        node_bin = shutil.which("node")
+        jsc_bin = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        cmd = [node_bin, "-e", eval_harness] if node_bin else [jsc_bin, "-e", eval_harness]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        res = json.loads(proc.stdout.strip().splitlines()[-1])
+        self.assertFalse(res["usedFallback"])
+        self.assertIn("Phones", res["templateNames"])
+        self.assertIn("Laptop", res["templateNames"])
+        self.assertIn("Compact Umbrella", res["suggestedNames"])
+
 
 if __name__ == "__main__":
     unittest.main()
