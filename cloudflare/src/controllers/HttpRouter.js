@@ -429,6 +429,7 @@ export class HttpRouter {
 
       if (path === "/api/trips/create") {
         const state = await this.repo.getUserState(userId);
+        const effectiveKey = body.forceRuleBackup ? "" : body.geminiApiKey || this.env?.GEMINI_API_KEY || "";
         const newTrip = await PackingEngineService.createTripObject({
           destination: body.destination || "Seattle",
           durationDays: body.durationDays || 5,
@@ -436,7 +437,7 @@ export class HttpRouter {
           endDate: body.endDate || "",
           tags: body.tags || ["work", "rental_car", "carry_on"],
           customRules: state.custom_rules,
-          geminiApiKey: body.geminiApiKey || this.env?.GEMINI_API_KEY || "",
+          geminiApiKey: effectiveKey,
         });
         state.trips.unshift(newTrip);
         await this.repo.saveUserState(userId, state);
@@ -489,6 +490,7 @@ export class HttpRouter {
         const startDate = String(body.startDate || existing.startDate || "").trim();
         const endDate = String(body.endDate || existing.endDate || "").trim();
         const durationDays = Number(body.durationDays) || Number(existing.durationDays) || 3;
+        const effectiveRecreateKey = body.forceRuleBackup ? "" : body.geminiApiKey || this.env?.GEMINI_API_KEY || "";
         const recreated = await PackingEngineService.createTripObject({
           destination: existing.destination || "Atlanta",
           durationDays,
@@ -496,7 +498,7 @@ export class HttpRouter {
           endDate,
           tags,
           customRules: state.custom_rules,
-          geminiApiKey: body.geminiApiKey || this.env?.GEMINI_API_KEY || "",
+          geminiApiKey: effectiveRecreateKey,
         });
         recreated.tripMode = body.tripMode || existing.tripMode || "OUTBOUND";
         const recreatedNames = new Set(

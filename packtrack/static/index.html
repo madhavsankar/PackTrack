@@ -926,6 +926,42 @@
         this.render();
       }
 
+      async fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+        const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+        try {
+          return await fetch(url, controller ? { ...options, signal: controller.signal } : options);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+
+      async postWithBackupFallback(url, payload, timeoutMs = 15000) {
+        try {
+          const resp = await this.fetchWithTimeout(
+            url,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            },
+            timeoutMs
+          );
+          if (resp.ok || resp.status < 500) return resp;
+          throw new Error("Server timeout or error");
+        } catch (_) {
+          return await this.fetchWithTimeout(
+            url,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...payload, geminiApiKey: "", forceRuleBackup: true }),
+            },
+            6000
+          );
+        }
+      }
+
       async answerInterviewWork(isWork) {
         this.iv.isWork = Boolean(isWork);
         this.iv.step = "CREATING";
@@ -936,18 +972,18 @@
             this.iv.carMode,
             this.iv.luggageSpace,
           ];
-          const resp = await fetch(`/api/trips/create?user=${encodeURIComponent(this.userId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+          const resp = await this.postWithBackupFallback(
+            `/api/trips/create?user=${encodeURIComponent(this.userId)}`,
+            {
               destination: this.iv.destination || "Seattle",
               durationDays: this.iv.days || 4,
               startDate: this.iv.startDate,
               endDate: this.iv.endDate,
               tags,
               geminiApiKey: localStorage.getItem("packtrack_gemini_key") || "",
-            }),
-          });
+            },
+            15000
+          );
           if (resp.ok) {
             this.state = await resp.json();
             this.openTripDetail(0);
@@ -1033,14 +1069,14 @@
           btn.disabled = true;
         }
         try {
-          const resp = await fetch(`/api/trips/recreate?user=${encodeURIComponent(this.userId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+          const resp = await this.postWithBackupFallback(
+            `/api/trips/recreate?user=${encodeURIComponent(this.userId)}`,
+            {
               tripIndex: this.activeTripIdx,
               geminiApiKey: localStorage.getItem("packtrack_gemini_key") || "",
-            }),
-          });
+            },
+            15000
+          );
           if (resp.ok) {
             this.state = await resp.json();
             this.closeModals();
@@ -1067,17 +1103,17 @@
             document.getElementById("nt-car").value,
             document.getElementById("nt-luggage").value,
           ];
-          const resp = await fetch(`/api/trips/create?user=${encodeURIComponent(this.userId)}`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+          const resp = await this.postWithBackupFallback(
+            `/api/trips/create?user=${encodeURIComponent(this.userId)}`,
+            {
               destination,
               durationDays,
               startDate,
               tags,
               geminiApiKey: localStorage.getItem("packtrack_gemini_key") || "",
-            }),
-          });
+            },
+            15000
+          );
           if (resp.ok) {
             this.state = await resp.json();
             this.closeModals();

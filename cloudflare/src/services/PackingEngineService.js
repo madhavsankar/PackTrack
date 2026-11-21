@@ -188,12 +188,46 @@ export class PackingEngineService {
     return cascade;
   }
 
+  static async fetchWithTimeout(
+    url,
+    options = {},
+    timeoutMs = 4500,
+    fetchImpl = typeof fetch !== "undefined" ? fetch : null
+  ) {
+    if (!fetchImpl) {
+      throw new Error("No fetch implementation available");
+    }
+    if (!timeoutMs || timeoutMs <= 0 || typeof setTimeout === "undefined") {
+      return fetchImpl(url, options);
+    }
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let timer = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        if (controller) controller.abort();
+        const err = new Error("Request timed out");
+        err.name = "AbortError";
+        reject(err);
+      }, timeoutMs);
+    });
+    try {
+      const fetchOpts = controller && !options.signal ? { ...options, signal: controller.signal } : options;
+      return await Promise.race([fetchImpl(url, fetchOpts), timeoutPromise]);
+    } finally {
+      if (timer && typeof clearTimeout !== "undefined") clearTimeout(timer);
+    }
+  }
+
   /**
    * Dynamically discovers available Gemini models from `/v1beta/models` (cached for 1 hour)
    * so if Google introduces `gemini-4.3-flash` or `gemini-3.2-flash-lite` tomorrow, the cascade
    * automatically picks them up.
    */
-  static async resolveModelCascade(geminiApiKey, fetchImpl = fetch) {
+  static async resolveModelCascade(
+    geminiApiKey,
+    fetchImpl = typeof fetch !== "undefined" ? fetch : null,
+    timeoutMs = 3000
+  ) {
     const now = Date.now();
     if (
       PackingEngineService._cachedDiscoveredModels &&
@@ -205,8 +239,8 @@ export class PackingEngineService {
 
     try {
       const listUrl = `https://generativelanguage.googleapis.com/v1beta/models?key=${encodeURIComponent(String(geminiApiKey).trim())}`;
-      const resp = await fetchImpl(listUrl, { method: "GET" });
-      if (resp.ok) {
+      const resp = await PackingEngineService.fetchWithTimeout(listUrl, { method: "GET" }, timeoutMs, fetchImpl);
+      if (resp && resp.ok) {
         const data = await resp.json();
         if (Array.isArray(data?.models) && data.models.length > 0) {
           PackingEngineService._cachedDiscoveredModels = data.models;
@@ -215,7 +249,7 @@ export class PackingEngineService {
         }
       }
     } catch (_) {
-      // Ignore discovery failure and use default cascade
+      // Ignore discovery failure or timeout and use default cascade
     }
     return PackingEngineService.rankModelsFromList([]);
   }
@@ -306,15 +340,37 @@ export class PackingEngineService {
   static async callGeminiWithModelCascade(
     requestBody,
     geminiApiKey,
-    { fetchImpl = fetch, cascadeOverride = null, maxRetriesPerModel = 2, retryDelayMs = null } = {}
+    {
+      fetchImpl = typeof fetch !== "undefined" ? fetch : null,
+      cascadeOverride = null,
+      maxRetriesPerModel = 2,
+      retryDelayMs = null,
+      deadlineAtMs = null,
+      maxWallMs = null,
+      perModelTimeoutMs = null,
+    } = {}
   ) {
     const cleanKey = String(geminiApiKey || "").trim();
     if (!cleanKey) return null;
 
+    const isLiveRuntime = typeof fetch !== "undefined" && fetchImpl === fetch && !cascadeOverride;
+    const enforceTimeouts =
+      isLiveRuntime || typeof maxWallMs === "number" || typeof perModelTimeoutMs === "number" || typeof deadlineAtMs === "number";
+    const startedAt = Date.now();
+    const effectiveMaxWallMs =
+      typeof maxWallMs === "number" ? maxWallMs : isLiveRuntime ? 11000 : 300000;
+    const effectiveDeadline =
+      typeof deadlineAtMs === "number" ? deadlineAtMs : startedAt + effectiveMaxWallMs;
+    const effectivePerModelTimeout =
+      typeof perModelTimeoutMs === "number" ? perModelTimeoutMs : isLiveRuntime ? 4800 : 0;
+
+    const discoveryBudgetMs = enforceTimeouts
+      ? Math.max(50, Math.min(2500, Math.floor((effectiveDeadline - Date.now()) / 3)))
+      : 0;
     const primaryCascade =
       Array.isArray(cascadeOverride) && cascadeOverride.length > 0
         ? cascadeOverride
-        : await PackingEngineService.resolveModelCascade(cleanKey, fetchImpl);
+        : await PackingEngineService.resolveModelCascade(cleanKey, fetchImpl, discoveryBudgetMs);
 
     let fullCascade;
     if (Array.isArray(cascadeOverride) && cascadeOverride.length > 0) {
@@ -333,48 +389,44 @@ export class PackingEngineService {
       fullCascade = Array.from(new Set(combined));
     }
 
-    const isLiveRuntime = typeof fetch !== "undefined" && fetchImpl === fetch && !cascadeOverride;
     const baseDelay =
       typeof retryDelayMs === "number"
         ? retryDelayMs
         : isLiveRuntime
-        ? 250
+        ? 200
         : 0;
 
-    const sleep = (ms) => (ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve());
-    const startedAt = Date.now();
-    const maxTotalNetworkCalls = isLiveRuntime ? 14 : 100;
-    const maxTotalWallMs = isLiveRuntime ? 24000 : 300000;
+    const sleep = (ms) =>
+      ms > 0 && typeof setTimeout !== "undefined"
+        ? new Promise((resolve) => setTimeout(resolve, ms))
+        : Promise.resolve();
+    const maxTotalNetworkCalls = isLiveRuntime ? 8 : 100;
     let totalNetworkCalls = 0;
 
     for (let mIdx = 0; mIdx < fullCascade.length; mIdx++) {
       const modelId = fullCascade[mIdx];
       let currentBody = requestBody;
-      const effectiveMaxRetries = isLiveRuntime && mIdx >= 3 ? Math.min(1, maxRetriesPerModel) : maxRetriesPerModel;
+      const effectiveMaxRetries = enforceTimeouts && mIdx >= 2 ? 0 : maxRetriesPerModel;
       for (let attempt = 0; attempt <= effectiveMaxRetries; attempt++) {
-        if (totalNetworkCalls >= maxTotalNetworkCalls || Date.now() - startedAt > maxTotalWallMs) {
+        const remainingMs = effectiveDeadline - Date.now();
+        if (totalNetworkCalls >= maxTotalNetworkCalls || remainingMs <= (enforceTimeouts ? 150 : 0)) {
           return null;
         }
         totalNetworkCalls++;
         try {
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(modelId)}:generateContent?key=${encodeURIComponent(cleanKey)}`;
-          let controller = null;
-          let timer = null;
-          if (isLiveRuntime && typeof AbortController !== "undefined") {
-            controller = new AbortController();
-            timer = setTimeout(() => controller.abort(), 6500);
-          }
-          let resp;
-          try {
-            resp = await fetchImpl(url, {
+          const callTimeoutMs =
+            effectivePerModelTimeout > 0 ? Math.max(80, Math.min(effectivePerModelTimeout, remainingMs)) : 0;
+          const resp = await PackingEngineService.fetchWithTimeout(
+            url,
+            {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(currentBody),
-              ...(controller ? { signal: controller.signal } : {}),
-            });
-          } finally {
-            if (timer) clearTimeout(timer);
-          }
+            },
+            callTimeoutMs,
+            fetchImpl
+          );
           if (!resp.ok) {
             const status = Number(resp.status) || 0;
             // If a model rejects nested responseSchema with 400, retry immediately with plain JSON mode (do not count against attempt or call cap)
@@ -394,7 +446,7 @@ export class PackingEngineService {
               break;
             }
             // Retry on transient 429 / 5xx / 408 before failing over to next model
-            if (attempt < effectiveMaxRetries) {
+            if (attempt < effectiveMaxRetries && effectiveDeadline - Date.now() > baseDelay + 200) {
               await sleep(baseDelay * (attempt + 1));
               continue;
             }
@@ -411,15 +463,15 @@ export class PackingEngineService {
             return { data, modelUsed: modelId, attemptsOnModel: attempt + 1 };
           }
           // Truncated or empty response -> retry before moving to next model
-          if (attempt < effectiveMaxRetries) {
+          if (attempt < effectiveMaxRetries && effectiveDeadline - Date.now() > baseDelay + 200) {
             await sleep(baseDelay * (attempt + 1));
           }
         } catch (err) {
-          // If a model timed out (AbortError) in live runtime, immediately fail over to the next model in the cascade
-          if (isLiveRuntime && err && err.name === "AbortError") {
+          // If a model timed out (AbortError), immediately fail over to the next model in the cascade
+          if (enforceTimeouts && err && err.name === "AbortError") {
             break;
           }
-          if (attempt < effectiveMaxRetries) {
+          if (attempt < effectiveMaxRetries && effectiveDeadline - Date.now() > baseDelay + 200) {
             await sleep(baseDelay * (attempt + 1));
           }
         }
@@ -449,7 +501,7 @@ export class PackingEngineService {
 
     try {
       const geoUrl = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cleanDest)}&count=1&language=en&format=json`;
-      const geoResp = await fetch(geoUrl);
+      const geoResp = await PackingEngineService.fetchWithTimeout(geoUrl, {}, 3500);
       if (!geoResp.ok) return fallback;
       const geoData = await geoResp.json();
       const first = geoData?.results?.[0];
@@ -482,7 +534,7 @@ export class PackingEngineService {
           wxUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${lat}&longitude=${lon}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,snowfall_sum,wind_speed_10m_max&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&start_date=${histStart}&end_date=${histEnd}`;
         }
       }
-      const wxResp = await fetch(wxUrl);
+      const wxResp = await PackingEngineService.fetchWithTimeout(wxUrl, {}, 4000);
       if (!wxResp.ok) {
         return { ...fallback, city, country, countryCode, plugTypes, isInternational };
       }
@@ -925,7 +977,17 @@ export class PackingEngineService {
    * to generate dynamic suggested items (tagged with `[SUGGESTED] `) that appear at the end of the checklist.
    * Falls back to a day-by-day forecast analyzer if no API key is configured.
    */
-  static async generateGeminiSuggestions({ weather, durationDays, tags = [], templateItems = [], geminiApiKey = "", fetchImpl = fetch }) {
+  static async generateGeminiSuggestions({
+    weather,
+    durationDays,
+    tags = [],
+    templateItems = [],
+    geminiApiKey = "",
+    fetchImpl = typeof fetch !== "undefined" ? fetch : null,
+    deadlineAtMs = null,
+    maxWallMs = null,
+    perModelTimeoutMs = null,
+  }) {
     const existingNames = new Set((templateItems || []).map((i) => String(i.name || "").trim().toLowerCase()));
     const tagSet = new Set((tags || []).map((t) => String(t).toLowerCase().trim()));
     const isPersonalCar = tagSet.has("own_car") || tagSet.has("personal_car");
@@ -942,7 +1004,12 @@ export class PackingEngineService {
           templateItems,
         });
 
-        const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey, { fetchImpl });
+        const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey, {
+          fetchImpl,
+          deadlineAtMs,
+          maxWallMs,
+          perModelTimeoutMs,
+        });
         if (cascadeResult?.data) {
           const suggestions = PackingEngineService.parseGeminiSuggestionResponse(cascadeResult.data, {
             existingNames,
@@ -1071,7 +1138,16 @@ export class PackingEngineService {
     return suggestions;
   }
 
-  static async evaluateTemplateAndSuggestWithGemini({ weather, durationDays = 3, tags = [], customRules = [], geminiApiKey = "", fetchImpl = fetch }) {
+  static async evaluateTemplateAndSuggestWithGemini({
+    weather,
+    durationDays = 3,
+    tags = [],
+    customRules = [],
+    geminiApiKey = "",
+    fetchImpl = typeof fetch !== "undefined" ? fetch : null,
+    maxWallMs = null,
+    perModelTimeoutMs = null,
+  }) {
     const fallbackTemplateItems = PackingEngineService.buildTripChecklist({
       weather,
       durationDays,
@@ -1082,6 +1158,10 @@ export class PackingEngineService {
     const suppressPlug = !showPlug;
 
     if (geminiApiKey && String(geminiApiKey).trim()) {
+      const isLiveRuntime = typeof fetch !== "undefined" && fetchImpl === fetch;
+      const effectiveBudgetMs = typeof maxWallMs === "number" ? maxWallMs : isLiveRuntime ? 11000 : 300000;
+      const sharedDeadlineAtMs = Date.now() + effectiveBudgetMs;
+      let stage1CascadeFailed = false;
       try {
         const days = Math.max(1, Number(durationDays) || 3);
         const tagSet = new Set((tags || []).map((t) => String(t).toLowerCase().trim()));
@@ -1194,8 +1274,15 @@ export class PackingEngineService {
           },
         };
 
-        const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey, { fetchImpl });
-        if (cascadeResult?.data) {
+        const cascadeResult = await PackingEngineService.callGeminiWithModelCascade(requestBody, geminiApiKey, {
+          fetchImpl,
+          deadlineAtMs: sharedDeadlineAtMs,
+          maxWallMs,
+          perModelTimeoutMs,
+        });
+        if (!cascadeResult?.data) {
+          stage1CascadeFailed = true;
+        } else {
           const data = cascadeResult.data;
           const cleanJson =
             PackingEngineService.extractCandidateJson(data) ||
@@ -1283,6 +1370,7 @@ export class PackingEngineService {
               });
             }
 
+            const canTryStage2 = sharedDeadlineAtMs - Date.now() > 600;
             const finalSuggested =
               suggestedItems.length > 0
                 ? suggestedItems
@@ -1291,39 +1379,48 @@ export class PackingEngineService {
                     durationDays,
                     tags,
                     templateItems: finalTemplateItems,
-                    geminiApiKey,
+                    geminiApiKey: canTryStage2 ? geminiApiKey : "",
                     fetchImpl,
+                    deadlineAtMs: sharedDeadlineAtMs,
+                    maxWallMs,
+                    perModelTimeoutMs,
                   });
             return { templateItems: finalTemplateItems, suggestedItems: finalSuggested, usedFallback: false };
           }
         }
       } catch (_) {
-        // Fall through to Stage 2 lightweight Gemini suggestions call
+        // Fall through to Stage 2 lightweight Gemini suggestions call if cascade wasn't exhausted
       }
 
-      // Stage 2 Gemini Fallback: if the combined rule+suggestion call failed/timed out,
-      // try the lightweight Gemini suggestions call (2-5 items only) before falling back to rule-based!
-      try {
-        const existingNames = new Set((fallbackTemplateItems || []).map((i) => String(i.name || "").trim().toLowerCase()));
-        const stage2Payload = PackingEngineService.buildGeminiSuggestionRequestPayload({
-          weather,
-          durationDays,
-          tags,
-          templateItems: fallbackTemplateItems,
-        });
-        const stage2Result = await PackingEngineService.callGeminiWithModelCascade(stage2Payload, geminiApiKey, { fetchImpl });
-        if (stage2Result?.data) {
-          const stage2Suggestions = PackingEngineService.parseGeminiSuggestionResponse(stage2Result.data, {
-            existingNames,
-            city: weather?.city || "destination",
-            suppressPlug,
+      // Only attempt Stage 2 if Stage 1 did NOT already exhaust the model cascade / deadline
+      if (!stage1CascadeFailed && sharedDeadlineAtMs - Date.now() > 600) {
+        try {
+          const existingNames = new Set((fallbackTemplateItems || []).map((i) => String(i.name || "").trim().toLowerCase()));
+          const stage2Payload = PackingEngineService.buildGeminiSuggestionRequestPayload({
+            weather,
+            durationDays,
+            tags,
+            templateItems: fallbackTemplateItems,
           });
-          if (stage2Suggestions.length > 0) {
-            return { templateItems: fallbackTemplateItems, suggestedItems: stage2Suggestions, usedFallback: false };
+          const stage2Result = await PackingEngineService.callGeminiWithModelCascade(stage2Payload, geminiApiKey, {
+            fetchImpl,
+            deadlineAtMs: sharedDeadlineAtMs,
+            maxWallMs,
+            perModelTimeoutMs,
+          });
+          if (stage2Result?.data) {
+            const stage2Suggestions = PackingEngineService.parseGeminiSuggestionResponse(stage2Result.data, {
+              existingNames,
+              city: weather?.city || "destination",
+              suppressPlug,
+            });
+            if (stage2Suggestions.length > 0) {
+              return { templateItems: fallbackTemplateItems, suggestedItems: stage2Suggestions, usedFallback: false };
+            }
           }
+        } catch (_) {
+          // Fall through to rule-based backup
         }
-      } catch (_) {
-        // Both Stage 1 and Stage 2 Gemini calls failed; fall through to rule-based backup
       }
     }
 
@@ -1333,6 +1430,7 @@ export class PackingEngineService {
       tags,
       templateItems: fallbackTemplateItems,
       geminiApiKey: "",
+      fetchImpl,
     });
     return { templateItems: fallbackTemplateItems, suggestedItems: fallbackSuggested, usedFallback: true };
   }

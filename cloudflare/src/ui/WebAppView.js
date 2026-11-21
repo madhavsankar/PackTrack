@@ -1475,26 +1475,67 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             this.iv.carMode,
             this.iv.luggageSpace,
           ];
-          const resp = await fetch("/api/trips/create", {
-            method: "POST",
-            headers: this.getHeaders(),
-            body: JSON.stringify({
+          const { resp, usedClientFallbackRetry } = await this.postWithBackupFallback(
+            "/api/trips/create",
+            {
               destination: this.iv.destination || "Seattle",
               durationDays: this.iv.days || 4,
               startDate: this.iv.startDate,
               endDate: this.iv.endDate,
               tags,
               geminiApiKey: localStorage.getItem("packtrack_gemini_key") || "",
-            }),
-          });
+            },
+            this.getHeaders(),
+            15000
+          );
           if (resp.ok) {
             this.state = await resp.json();
             this.openTripDetail(0);
+            if (usedClientFallbackRetry) {
+              this.showToast("⚠️ Gemini timed out — used rule-based backup checklist");
+            }
           } else {
+            this.showToast("Could not create trip — please try again");
             this.navigateHome();
           }
         } catch (_) {
+          this.showToast("Network error while creating trip");
           this.navigateHome();
+        }
+      }
+
+      async fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+        const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+        const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+        try {
+          return await fetch(url, controller ? { ...options, signal: controller.signal } : options);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }
+
+      async postWithBackupFallback(url, payload, headers, timeoutMs = 15000) {
+        try {
+          const resp = await this.fetchWithTimeout(
+            url,
+            { method: "POST", headers, body: JSON.stringify(payload) },
+            timeoutMs
+          );
+          if (resp.ok) return { resp, usedClientFallbackRetry: false };
+          if (resp.status >= 500) throw new Error("Server timeout or error");
+          return { resp, usedClientFallbackRetry: false };
+        } catch (_) {
+          // Retry immediately with empty geminiApiKey + forceRuleBackup so rule-based backup builds the checklist instantly
+          const backupResp = await this.fetchWithTimeout(
+            url,
+            {
+              method: "POST",
+              headers,
+              body: JSON.stringify({ ...payload, geminiApiKey: "", forceRuleBackup: true }),
+            },
+            6000
+          );
+          return { resp: backupResp, usedClientFallbackRetry: true };
         }
       }
 
@@ -1871,10 +1912,9 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
           if (this._lastPushPromise) {
             await Promise.race([this._lastPushPromise, new Promise((r) => setTimeout(r, 1500))]);
           }
-          const resp = await fetch("/api/trips/recreate", {
-            method: "POST",
-            headers: this.getHeaders(),
-            body: JSON.stringify({
+          const { resp, usedClientFallbackRetry } = await this.postWithBackupFallback(
+            "/api/trips/recreate",
+            {
               tripIndex: this.activeTripIdx,
               destination: currentTrip?.destination || "",
               startDate,
@@ -1884,8 +1924,10 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
               tripMode: currentTrip?.tripMode || "OUTBOUND",
               existingItems: currentTrip?.items || [],
               geminiApiKey: localStorage.getItem("packtrack_gemini_key") || "",
-            }),
-          });
+            },
+            this.getHeaders(),
+            15000
+          );
           if (resp.ok) {
             this.state = await resp.json();
             if (startDate && this.state.trips?.[this.activeTripIdx]) {
@@ -1895,7 +1937,11 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             }
             this.closeModals();
             this.render();
-            this.showToast("✓ Checklist recreated (checked items preserved)");
+            this.showToast(
+              usedClientFallbackRetry
+                ? "⚠️ Gemini timed out — recreated with rule-based backup"
+                : "✓ Checklist recreated (checked items preserved)"
+            );
           } else {
             this.showToast("Could not recreate checklist — please try again");
           }
@@ -1923,22 +1969,30 @@ export const WEB_APP_HTML = `<!DOCTYPE html>
             document.getElementById("nt-car").value,
             document.getElementById("nt-luggage").value,
           ];
-          const resp = await fetch("/api/trips/create", {
-            method: "POST",
-            headers: this.getHeaders(),
-            body: JSON.stringify({
+          const { resp, usedClientFallbackRetry } = await this.postWithBackupFallback(
+            "/api/trips/create",
+            {
               destination,
               durationDays,
               startDate,
               tags,
               geminiApiKey: localStorage.getItem("packtrack_gemini_key") || "",
-            }),
-          });
+            },
+            this.getHeaders(),
+            15000
+          );
           if (resp.ok) {
             this.state = await resp.json();
             this.closeModals();
             this.openTripDetail(0);
+            if (usedClientFallbackRetry) {
+              this.showToast("⚠️ Gemini timed out — used rule-based backup checklist");
+            }
+          } else {
+            this.showToast("Could not create trip — please try again");
           }
+        } catch (_) {
+          this.showToast("Network error while creating trip");
         } finally {
           btn.textContent = "Create Trip";
           btn.disabled = false;

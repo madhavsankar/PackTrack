@@ -102,6 +102,7 @@ class GeminiVoiceAgent:
 
         executed_tools: List[Dict[str, Any]] = []
         updated_trip: Optional[Dict[str, Any]] = None
+        turn_deadline = __import__("time").monotonic() + 12.0
 
         # Loop up to 3 tool-call rounds if Gemini chains function calls
         for _ in range(3):
@@ -129,6 +130,9 @@ class GeminiVoiceAgent:
                     "result": [{"type": "text", "text": json.dumps(tool_output)}],
                 })
 
+            remaining = turn_deadline - __import__("time").monotonic()
+            if remaining <= 0.5:
+                break
             followup_payload: Dict[str, Any] = {
                 "model": GEMINI_MODEL,
                 "system_instruction": SYSTEM_INSTRUCTION,
@@ -136,7 +140,7 @@ class GeminiVoiceAgent:
                 "input": result_steps,
                 "tools": tools,
             }
-            interaction = self._post_interaction(followup_payload, api_key)
+            interaction = self._post_interaction(followup_payload, api_key, timeout_sec=min(8.0, remaining))
             self.sessions[session_id] = interaction.get("id", self.sessions.get(session_id))
 
         reply_text = self._extract_output_text(interaction)
@@ -147,7 +151,7 @@ class GeminiVoiceAgent:
             "model": GEMINI_MODEL,
         }
 
-    def _post_interaction(self, payload: Dict[str, Any], api_key: str) -> Dict[str, Any]:
+    def _post_interaction(self, payload: Dict[str, Any], api_key: str, timeout_sec: float = 8.0) -> Dict[str, Any]:
         req = urllib.request.Request(
             INTERACTIONS_ENDPOINT,
             data=json.dumps(payload).encode("utf-8"),
@@ -157,7 +161,7 @@ class GeminiVoiceAgent:
             },
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=15.0) as resp:
+        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
     @staticmethod

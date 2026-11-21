@@ -930,6 +930,136 @@ class TestPackTrackEngine(unittest.TestCase):
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
 
+    def test_eval_hung_gemini_fast_fallback_to_rule_based_backup(self):
+        """Eval: Verifies a hung/unresponsive Gemini API aborts within the wall-clock deadline, skips duplicate Stage 2 cascade, and returns rule-based backup."""
+        import json
+        import shutil
+        import subprocess
+
+        root_dir = os.path.dirname(os.path.dirname(__file__))
+
+        # 1. Verify Android OpenMeteoWeatherService and GeminiVoiceAssistant.postInteraction set explicit timeouts
+        weather_kt_path = os.path.join(
+            root_dir, "android", "app", "src", "main", "java", "com", "packtrack", "app", "data", "OpenMeteoWeatherService.kt"
+        )
+        with open(weather_kt_path, "r", encoding="utf-8") as f:
+            weather_kt = f.read()
+        self.assertIn("connectTimeout", weather_kt)
+        self.assertIn("readTimeout", weather_kt)
+        self.assertNotIn("URL(geoUrl).readText()", weather_kt)
+        self.assertNotIn("URL(weatherUrl).readText()", weather_kt)
+
+        agent_kt_path = os.path.join(
+            root_dir, "android", "app", "src", "main", "java", "com", "packtrack", "app", "agent", "GeminiVoiceAssistant.kt"
+        )
+        with open(agent_kt_path, "r", encoding="utf-8") as f:
+            agent_kt = f.read()
+        post_interaction_block = agent_kt.split("private fun postInteraction(")[1]
+        self.assertIn("connectTimeout", post_interaction_block)
+        self.assertIn("readTimeout", post_interaction_block)
+        self.assertIn("GeminiCascadeExhaustedException", agent_kt)
+
+        # 2. Simulate completely hung Gemini endpoints in PackingEngineService and verify bounded fallback
+        engine_path = os.path.join(root_dir, "cloudflare", "src", "services", "PackingEngineService.js")
+        with open(engine_path, "r", encoding="utf-8") as f:
+            engine_src = f.read().replace("export class PackingEngineService", "class PackingEngineService")
+
+        eval_harness = (
+            """
+        if (typeof setTimeout === 'undefined') {
+          let _virtualNow = 1000000;
+          let _nextTimerId = 1;
+          const _cancelled = new Set();
+          Date.now = () => _virtualNow;
+          globalThis.setTimeout = (fn, ms = 0) => {
+            const id = _nextTimerId++;
+            Promise.resolve().then(() => {
+              if (!_cancelled.has(id)) {
+                _virtualNow += Number(ms) || 0;
+                fn();
+              }
+            });
+            return id;
+          };
+          globalThis.clearTimeout = (id) => { _cancelled.add(id); };
+        }
+        """
+            + engine_src
+            + """
+        (async () => {
+          let generateCalls = 0;
+          let discoveryCalls = 0;
+          const hungFetch = (url, opts = {}) => new Promise((resolve, reject) => {
+            if (url.includes(':generateContent')) generateCalls++;
+            else discoveryCalls++;
+            if (opts && opts.signal) {
+              opts.signal.addEventListener('abort', () => {
+                const e = new Error('Aborted');
+                e.name = 'AbortError';
+                reject(e);
+              });
+            }
+            // Never resolves before per-call timeout fires
+          });
+
+          const t0 = Date.now();
+          const res = await PackingEngineService.evaluateTemplateAndSuggestWithGemini({
+            weather: {
+              city: 'Edinburgh',
+              country: 'United Kingdom',
+              countryCode: 'GB',
+              avgHighF: 44,
+              avgLowF: 34,
+              minLowF: 30,
+              maxHighF: 46,
+              rainyDaysCount: 3,
+              hasSnow: true,
+              maxWindMph: 24,
+              plugTypes: 'Type G',
+              isInternational: true,
+              dailyBreakdown: ['Day 1: 30°F–44°F, Snow & Rain']
+            },
+            durationDays: 5,
+            tags: ['work', 'rental_car', 'carry_on'],
+            customRules: [
+              { name: 'Phones', category: 'On Me', moduleKey: 'Always', scaleByDays: false, ratioPerDay: 1, bagLocation: 'Personal' },
+              { name: 'Laptop', category: 'Electronics', moduleKey: 'Only when working', scaleByDays: false, ratioPerDay: 1, bagLocation: 'Personal' }
+            ],
+            geminiApiKey: 'hung-key',
+            fetchImpl: hungFetch,
+            maxWallMs: 300,
+            perModelTimeoutMs: 70
+          });
+          const elapsedMs = Date.now() - t0;
+
+          const out = JSON.stringify({
+            usedFallback: res.usedFallback,
+            elapsedMs,
+            discoveryCalls,
+            generateCalls,
+            templateNames: res.templateItems.map(i => i.name),
+            suggestedNames: res.suggestedItems.map(i => i.name)
+          });
+          if (typeof console !== 'undefined' && console.log) console.log(out);
+          else if (typeof print !== 'undefined') print(out);
+        })();
+        """
+        )
+
+        node_bin = shutil.which("node")
+        jsc_bin = "/System/Library/Frameworks/JavaScriptCore.framework/Versions/Current/Helpers/jsc"
+        cmd = [node_bin, "-e", eval_harness] if node_bin else [jsc_bin, "-e", eval_harness]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        res = json.loads(proc.stdout.strip().splitlines()[-1])
+
+        self.assertTrue(res["usedFallback"])
+        self.assertLess(res["elapsedMs"], 1000, f"Expected fast bounded fallback, took {res['elapsedMs']}ms")
+        self.assertGreaterEqual(res["generateCalls"], 1)
+        self.assertIn("Phones", res["templateNames"])
+        self.assertIn("Laptop", res["templateNames"])
+        self.assertIn("Raincoat / Compact Umbrella", res["suggestedNames"])
+        self.assertIn("Power Adapter (Type G)", res["suggestedNames"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -60,6 +60,26 @@ export class FirestoreRepository {
     };
   }
 
+  async _fetchWithTimeout(url, options = {}, timeoutMs = 4500) {
+    if (!timeoutMs || timeoutMs <= 0 || typeof setTimeout === "undefined") {
+      return fetch(url, options);
+    }
+    const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+    let timer = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        if (controller) controller.abort();
+        reject(new Error("Firestore request timed out"));
+      }, timeoutMs);
+    });
+    try {
+      const fetchOpts = controller ? { ...options, signal: controller.signal } : options;
+      return await Promise.race([fetch(url, fetchOpts), timeoutPromise]);
+    } finally {
+      if (timer && typeof clearTimeout !== "undefined") clearTimeout(timer);
+    }
+  }
+
   async getUserState(userId = "default") {
     const clean = FirestoreRepository.sanitizeUserId(userId);
     const url = this.docUrlForUser(clean);
@@ -68,7 +88,7 @@ export class FirestoreRepository {
     }
 
     try {
-      const resp = await fetch(url, { method: "GET" });
+      const resp = await this._fetchWithTimeout(url, { method: "GET" }, 4000);
       if (!resp.ok) {
         return this.defaultState(clean);
       }
@@ -123,11 +143,15 @@ export class FirestoreRepository {
     };
 
     try {
-      const resp = await fetch(url, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(firestoreBody),
-      });
+      const resp = await this._fetchWithTimeout(
+        url,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(firestoreBody),
+        },
+        4500
+      );
       return resp.ok;
     } catch (_) {
       return false;

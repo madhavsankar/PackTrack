@@ -3,6 +3,7 @@ package com.packtrack.app.data
 import com.packtrack.app.domain.TravelerTemplateCatalog
 import com.packtrack.app.domain.WeatherForecast
 import org.json.JSONObject
+import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 
@@ -16,6 +17,25 @@ object OpenMeteoWeatherService {
     private const val FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
     private const val ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
     private const val DEFAULT_HOME_COUNTRY = "US"
+    private const val CONNECT_TIMEOUT_MS = 3500
+    private const val READ_TIMEOUT_MS = 4000
+
+    private fun fetchTextWithTimeout(urlStr: String): String {
+        val conn = (URL(urlStr).openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = CONNECT_TIMEOUT_MS
+            readTimeout = READ_TIMEOUT_MS
+        }
+        try {
+            val code = conn.responseCode
+            if (code !in 200..299) {
+                throw IllegalStateException("Open-Meteo HTTP $code")
+            }
+            return conn.inputStream.bufferedReader().use { it.readText() }
+        } finally {
+            conn.disconnect()
+        }
+    }
 
     private fun describeWmoCode(code: Int): String = when (code) {
         0 -> "Clear sky"
@@ -52,7 +72,7 @@ object OpenMeteoWeatherService {
 
         try {
             val geoUrl = "$GEOCODING_URL?name=${URLEncoder.encode(cleanCity, "UTF-8")}&count=1&language=en&format=json"
-            val geoText = URL(geoUrl).readText()
+            val geoText = fetchTextWithTimeout(geoUrl)
             val results = JSONObject(geoText).optJSONArray("results")
             if (results != null && results.length() > 0) {
                 val top = results.getJSONObject(0)
@@ -104,7 +124,7 @@ object OpenMeteoWeatherService {
                         "&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto&forecast_days=$forecastDays"
                 }
 
-                val dailyJson = JSONObject(URL(weatherUrl).readText()).getJSONObject("daily")
+                val dailyJson = JSONObject(fetchTextWithTimeout(weatherUrl)).getJSONObject("daily")
                 val timeArr = dailyJson.optJSONArray("time")
                 val codeArr = dailyJson.optJSONArray("weather_code")
                 val maxArr = dailyJson.getJSONArray("temperature_2m_max")

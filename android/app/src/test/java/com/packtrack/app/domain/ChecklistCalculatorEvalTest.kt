@@ -575,6 +575,25 @@ class ChecklistCalculatorEvalTest {
             "TripChecklistScreen date pill must be clickable to open Edit Dates dialog",
             tripChecklistText.contains("showEditDatesDialog = true")
         )
+
+        val weatherServiceText = java.io.File(mainDir, "java/com/packtrack/app/data/OpenMeteoWeatherService.kt").readText()
+        assertTrue(
+            "OpenMeteoWeatherService must set explicit connectTimeout and readTimeout so offline/captive portals never hang",
+            weatherServiceText.contains("connectTimeout") && weatherServiceText.contains("readTimeout")
+        )
+        assertFalse(
+            "OpenMeteoWeatherService must not use unbounded URL(...).readText()",
+            weatherServiceText.contains(".readText()") && !weatherServiceText.contains("bufferedReader().use { it.readText() }")
+        )
+        val postInteractionText = agentText.substringAfter("private fun postInteraction(")
+        assertTrue(
+            "GeminiVoiceAssistant.postInteraction must set connectTimeout and readTimeout",
+            postInteractionText.contains("connectTimeout") && postInteractionText.contains("readTimeout")
+        )
+        assertTrue(
+            "GeminiVoiceAssistant must skip duplicate Stage 2 cascade when Stage 1 cascade already exhausted",
+            agentText.contains("GeminiCascadeExhaustedException")
+        )
     }
 }
 

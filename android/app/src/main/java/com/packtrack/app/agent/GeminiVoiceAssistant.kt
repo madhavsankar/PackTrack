@@ -724,6 +724,8 @@ class GeminiVoiceAssistant(
         )
 
         if (geminiApiKey.isNotBlank()) {
+            val geminiDeadlineMs = System.currentTimeMillis() + 11_000L
+            var cascadeExhausted = false
             try {
                 val dailyWeatherText = if (forecast.dailyBreakdown.isNotEmpty()) {
                     forecast.dailyBreakdown.joinToString("\n") { "  - $it" }
@@ -791,7 +793,7 @@ class GeminiVoiceAssistant(
                 """.trimIndent()
 
                 val allowedCategories = PackTrackThemeState.allCategories(customRules.map { it.category })
-                val rawText = callGeminiEvaluateAndSuggest(prompt, allowedCategories)
+                val rawText = callGeminiEvaluateAndSuggest(prompt, allowedCategories, geminiDeadlineMs)
                 val cleanJson = (extractCleanJson(rawText) ?: rawText).trim()
                 val rootObj = if (cleanJson.startsWith("[")) {
                     JSONObject().put("templateItems", JSONArray()).put("suggestedItems", JSONArray(cleanJson))
@@ -887,7 +889,7 @@ class GeminiVoiceAssistant(
 
                 val finalSuggestions = if (parsedSuggestions.isNotEmpty()) {
                     parsedSuggestions
-                } else {
+                } else if (System.currentTimeMillis() < geminiDeadlineMs - 800L) {
                     val stage2 = tryGenerateSuggestionsViaGeminiOnly(
                         tripId,
                         days,
@@ -895,7 +897,8 @@ class GeminiVoiceAssistant(
                         carMode,
                         luggageSpace,
                         forecast,
-                        finalTemplate
+                        finalTemplate,
+                        geminiDeadlineMs
                     )
                     if (stage2.isNotEmpty()) {
                         stage2
@@ -907,25 +910,36 @@ class GeminiVoiceAssistant(
                             existingItems = finalTemplate
                         )
                     }
+                } else {
+                    ChecklistCalculator.buildDynamicWeatherSuggestions(
+                        tripId = tripId,
+                        carMode = carMode,
+                        forecast = forecast,
+                        existingItems = finalTemplate
+                    )
                 }
                 return Triple(finalTemplate, finalSuggestions, false)
+            } catch (_: GeminiCascadeExhaustedException) {
+                cascadeExhausted = true
             } catch (_: Exception) {
-                // Fall through to Stage 2 lightweight Gemini suggestions call below
+                // Fall through to Stage 2 lightweight Gemini suggestions call if time remains
             }
 
-            // Stage 2 Gemini Fallback: if the combined rule+suggestion call failed/timed out,
-            // try the lightweight Gemini suggestions call (2-5 items only) before falling back to rule-based!
-            val stage2Suggestions = tryGenerateSuggestionsViaGeminiOnly(
-                tripId = tripId,
-                days = days,
-                isWork = isWork,
-                carMode = carMode,
-                luggageSpace = luggageSpace,
-                forecast = forecast,
-                templateItems = fallbackTemplateItems
-            )
-            if (stage2Suggestions.isNotEmpty()) {
-                return Triple(fallbackTemplateItems, stage2Suggestions, false)
+            // Only attempt Stage 2 if Stage 1 did NOT already exhaust the model cascade / deadline
+            if (!cascadeExhausted && System.currentTimeMillis() < geminiDeadlineMs - 800L) {
+                val stage2Suggestions = tryGenerateSuggestionsViaGeminiOnly(
+                    tripId = tripId,
+                    days = days,
+                    isWork = isWork,
+                    carMode = carMode,
+                    luggageSpace = luggageSpace,
+                    forecast = forecast,
+                    templateItems = fallbackTemplateItems,
+                    deadlineEpochMs = geminiDeadlineMs
+                )
+                if (stage2Suggestions.isNotEmpty()) {
+                    return Triple(fallbackTemplateItems, stage2Suggestions, false)
+                }
             }
         }
 
@@ -938,6 +952,8 @@ class GeminiVoiceAssistant(
         return Triple(fallbackTemplateItems, fallbackSuggestions, true)
     }
 
+    private class GeminiCascadeExhaustedException(message: String) : IllegalStateException(message)
+
     private fun tryGenerateSuggestionsViaGeminiOnly(
         tripId: Long,
         days: Int,
@@ -945,10 +961,11 @@ class GeminiVoiceAssistant(
         carMode: CarTransportMode,
         luggageSpace: LuggageSpace,
         forecast: WeatherForecast,
-        templateItems: List<PackingItemEntity>
+        templateItems: List<PackingItemEntity>,
+        deadlineEpochMs: Long = System.currentTimeMillis() + 11_000L
     ): List<PackingItemEntity> {
         val existingNamesLower = templateItems.map { it.name.trim().lowercase() }.toSet()
-        if (geminiApiKey.isBlank()) return emptyList()
+        if (geminiApiKey.isBlank() || System.currentTimeMillis() >= deadlineEpochMs - 500L) return emptyList()
         try {
             val dailyWeatherText = if (forecast.dailyBreakdown.isNotEmpty()) {
                 forecast.dailyBreakdown.joinToString("\n") { "  - $it" }
@@ -985,7 +1002,7 @@ class GeminiVoiceAssistant(
             """.trimIndent()
 
             val allowedCategories = PackTrackThemeState.allCategories(templateItems.map { it.category })
-            val rawText = callGeminiGenerateContent(prompt, allowedCategories)
+            val rawText = callGeminiGenerateContent(prompt, allowedCategories, deadlineEpochMs)
             val cleanJson = (extractCleanJson(rawText) ?: rawText).trim()
             val arr = if (cleanJson.startsWith("[")) {
                 JSONArray(cleanJson)
@@ -1173,7 +1190,8 @@ class GeminiVoiceAssistant(
 
     private fun callGeminiEvaluateAndSuggest(
         prompt: String,
-        allowedCategories: List<String> = PackingCategory.orderedDisplayNames
+        allowedCategories: List<String> = PackingCategory.orderedDisplayNames,
+        deadlineEpochMs: Long = System.currentTimeMillis() + 11_000L
     ): String {
         val responseSchema = JSONObject().apply {
             put("type", "OBJECT")
@@ -1198,63 +1216,72 @@ class GeminiVoiceAssistant(
             )
             put("required", JSONArray(listOf("templateItems", "suggestedItems")))
         }
-        return postGeminiStructuredRequest(prompt, responseSchema)
+        return postGeminiStructuredRequest(prompt, responseSchema, deadlineEpochMs = deadlineEpochMs)
     }
 
     private fun callGeminiGenerateContent(
         prompt: String,
-        allowedCategories: List<String> = PackingCategory.orderedDisplayNames
+        allowedCategories: List<String> = PackingCategory.orderedDisplayNames,
+        deadlineEpochMs: Long = System.currentTimeMillis() + 11_000L
     ): String {
         val responseSchema = JSONObject().apply {
             put("type", "ARRAY")
             put("description", "2 to 5 context-aware weather and trip packing suggestions not already in the template.")
             put("items", buildItemObjectSchema(allowedCategories))
         }
-        return postGeminiStructuredRequest(prompt, responseSchema)
+        return postGeminiStructuredRequest(prompt, responseSchema, deadlineEpochMs = deadlineEpochMs)
     }
 
-    private fun resolveModelCascade(): List<String> {
+    private fun resolveModelCascade(deadlineEpochMs: Long = System.currentTimeMillis() + 4_000L): List<String> {
         val now = System.currentTimeMillis()
         val existing = cachedDiscoveredModels
         if (!existing.isNullOrEmpty() && now - cachedCascadeAtMs < 3600_000L) {
             return rankModelIds(existing)
         }
+        val remainingMs = (deadlineEpochMs - now).toInt()
+        if (remainingMs <= 1200) {
+            return rankModelIds(emptyList())
+        }
         try {
             val conn = (URL("$MODELS_BASE_URL?key=$geminiApiKey").openConnection() as HttpURLConnection).apply {
                 requestMethod = "GET"
-                connectTimeout = 6000
-                readTimeout = 6000
+                connectTimeout = minOf(2500, remainingMs / 2)
+                readTimeout = minOf(3000, remainingMs / 2)
             }
-            if (conn.responseCode in 200..299) {
-                val body = conn.inputStream.bufferedReader().use { it.readText() }
-                val root = JSONObject(body)
-                val arr = root.optJSONArray("models") ?: JSONArray()
-                val discovered = mutableListOf<String>()
-                for (i in 0 until arr.length()) {
-                    val m = arr.optJSONObject(i) ?: continue
-                    val name = m.optString("name", "").removePrefix("models/").trim()
-                    if (name.isEmpty()) continue
-                    val desc = m.optString("description", "")
-                    val outLimit = m.optInt("outputTokenLimit", 0)
-                    val methods = m.optJSONArray("supportedGenerationMethods")
-                    var supportsGen = methods == null
-                    if (methods != null) {
-                        for (j in 0 until methods.length()) {
-                            if (methods.optString(j) == "generateContent") {
-                                supportsGen = true
-                                break
+            try {
+                if (conn.responseCode in 200..299) {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    val root = JSONObject(body)
+                    val arr = root.optJSONArray("models") ?: JSONArray()
+                    val discovered = mutableListOf<String>()
+                    for (i in 0 until arr.length()) {
+                        val m = arr.optJSONObject(i) ?: continue
+                        val name = m.optString("name", "").removePrefix("models/").trim()
+                        if (name.isEmpty()) continue
+                        val desc = m.optString("description", "")
+                        val outLimit = m.optInt("outputTokenLimit", 0)
+                        val methods = m.optJSONArray("supportedGenerationMethods")
+                        var supportsGen = methods == null
+                        if (methods != null) {
+                            for (j in 0 until methods.length()) {
+                                if (methods.optString(j) == "generateContent") {
+                                    supportsGen = true
+                                    break
+                                }
                             }
                         }
+                        if (supportsGen && scoreGeminiModelId(name, desc, outLimit) > 0) {
+                            discovered.add(name)
+                        }
                     }
-                    if (supportsGen && scoreGeminiModelId(name, desc, outLimit) > 0) {
-                        discovered.add(name)
+                    if (discovered.isNotEmpty()) {
+                        cachedDiscoveredModels = discovered
+                        cachedCascadeAtMs = now
+                        return rankModelIds(discovered)
                     }
                 }
-                if (discovered.isNotEmpty()) {
-                    cachedDiscoveredModels = discovered
-                    cachedCascadeAtMs = now
-                    return rankModelIds(discovered)
-                }
+            } finally {
+                conn.disconnect()
             }
         } catch (_: Exception) {
             // Ignore discovery error and fall back to default ranked cascade
@@ -1265,7 +1292,8 @@ class GeminiVoiceAssistant(
     private fun postGeminiStructuredRequest(
         prompt: String,
         responseSchema: JSONObject,
-        maxRetriesPerModel: Int = 2
+        maxRetriesPerModel: Int = 1,
+        deadlineEpochMs: Long = System.currentTimeMillis() + 11_000L
     ): String {
         fun buildPayloadBytes(includeSchema: Boolean): ByteArray {
             val payload = JSONObject().apply {
@@ -1294,32 +1322,34 @@ class GeminiVoiceAssistant(
 
         val schemaBytes = buildPayloadBytes(includeSchema = true)
         val plainJsonBytes = buildPayloadBytes(includeSchema = false)
-        val primaryCascade = resolveModelCascade()
+        val primaryCascade = resolveModelCascade(deadlineEpochMs)
         val speculativeAliases = setOf("gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite")
         val discoveredSet = (cachedDiscoveredModels ?: emptyList()).toSet()
         val activePrimary = primaryCascade.filter { it !in speculativeAliases || it in discoveredSet }
         val speculativeTail = primaryCascade.filter { it in speculativeAliases && it !in discoveredSet }
         val fullCascade = (activePrimary + EMERGENCY_LAST_RESORT_MODELS + speculativeTail).distinct()
-        val startedAtMs = System.currentTimeMillis()
-        val maxTotalWallMs = 24_000L
-        val maxTotalCalls = 14
+        val maxTotalCalls = 8
         var totalCalls = 0
 
         for ((mIdx, modelId) in fullCascade.withIndex()) {
             var useSchema = true
-            val effectiveMaxRetries = if (mIdx >= 3) minOf(1, maxRetriesPerModel) else maxRetriesPerModel
+            val effectiveMaxRetries = if (mIdx >= 2) 0 else maxRetriesPerModel
             var attempt = 0
             while (attempt <= effectiveMaxRetries) {
-                if (totalCalls >= maxTotalCalls || System.currentTimeMillis() - startedAtMs > maxTotalWallMs) {
-                    break
+                val remainingMs = deadlineEpochMs - System.currentTimeMillis()
+                if (totalCalls >= maxTotalCalls || remainingMs <= 450L) {
+                    throw GeminiCascadeExhaustedException("Gemini cascade deadline or call budget reached.")
                 }
                 totalCalls++
+                var conn: HttpURLConnection? = null
                 try {
-                    val conn = (URL("$MODELS_BASE_URL/$modelId:generateContent?key=$geminiApiKey").openConnection() as HttpURLConnection).apply {
+                    val clampedConnectMs = minOf(3500, remainingMs.toInt().coerceAtLeast(450))
+                    val clampedReadMs = minOf(4800, remainingMs.toInt().coerceAtLeast(450))
+                    conn = (URL("$MODELS_BASE_URL/$modelId:generateContent?key=$geminiApiKey").openConnection() as HttpURLConnection).apply {
                         requestMethod = "POST"
                         setRequestProperty("Content-Type", "application/json")
-                        connectTimeout = 5000
-                        readTimeout = 6500
+                        connectTimeout = clampedConnectMs
+                        readTimeout = clampedReadMs
                         doOutput = true
                     }
                     conn.outputStream.use { it.write(if (useSchema) schemaBytes else plainJsonBytes) }
@@ -1337,8 +1367,8 @@ class GeminiVoiceAssistant(
                             break
                         }
                         // Transient 429 / 5xx / 408 -> backoff and retry on this model before failing over
-                        if (attempt < effectiveMaxRetries) {
-                            Thread.sleep(250L * (attempt + 1))
+                        if (attempt < effectiveMaxRetries && deadlineEpochMs - System.currentTimeMillis() > 800L) {
+                            Thread.sleep(200L * (attempt + 1))
                             attempt++
                             continue
                         }
@@ -1351,24 +1381,26 @@ class GeminiVoiceAssistant(
                         lastWorkingModel = modelId
                         return cleanJson
                     }
-                    if (attempt < effectiveMaxRetries) {
-                        Thread.sleep(250L * (attempt + 1))
+                    if (attempt < effectiveMaxRetries && deadlineEpochMs - System.currentTimeMillis() > 800L) {
+                        Thread.sleep(200L * (attempt + 1))
                     }
-                } catch (e: java.net.SocketTimeoutException) {
+                } catch (_: java.net.SocketTimeoutException) {
                     // If a model timed out, fail over immediately to the next model in the cascade
                     break
                 } catch (_: Exception) {
-                    if (attempt < effectiveMaxRetries) {
+                    if (attempt < effectiveMaxRetries && deadlineEpochMs - System.currentTimeMillis() > 800L) {
                         try {
-                            Thread.sleep(250L * (attempt + 1))
+                            Thread.sleep(200L * (attempt + 1))
                         } catch (_: Exception) {
                         }
                     }
+                } finally {
+                    conn?.disconnect()
                 }
                 attempt++
             }
         }
-        throw IllegalStateException("All Gemini models in cascade failed after retries.")
+        throw GeminiCascadeExhaustedException("All Gemini models in cascade failed after retries.")
     }
 
     private suspend fun handleLocalSmartVoiceTurn(userSpeech: String, activeTripId: Long?): String {
@@ -1603,10 +1635,20 @@ class GeminiVoiceAssistant(
             requestMethod = "POST"
             setRequestProperty("Content-Type", "application/json")
             setRequestProperty("x-goog-api-key", geminiApiKey)
+            connectTimeout = 4500
+            readTimeout = 8000
             doOutput = true
         }
-        conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-        val responseText = conn.inputStream.bufferedReader().use { it.readText() }
-        return JSONObject(responseText)
+        try {
+            conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            val status = conn.responseCode
+            if (status !in 200..299) {
+                throw IllegalStateException("Gemini Interactions HTTP $status")
+            }
+            val responseText = conn.inputStream.bufferedReader().use { it.readText() }
+            return JSONObject(responseText)
+        } finally {
+            conn.disconnect()
+        }
     }
 }
